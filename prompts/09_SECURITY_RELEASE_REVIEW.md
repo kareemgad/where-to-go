@@ -1,0 +1,1 @@
+Conduct a prelaunch review of Where to Go: authorization, secrets, injection defenses, privacy, source rights, license/attribution, consent, accessibility, event freshness, paid placement labeling, cost controls, observability, backups and rollback. Provide severity-ranked findings, fixes and tests. Do not deploy publicly without approval.

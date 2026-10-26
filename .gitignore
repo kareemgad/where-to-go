@@ -1,0 +1,55 @@
+# ---- secrets: never commit, per CLAUDE.md ----
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+.supabase/
+service-account*.json
+
+# ---- node / next.js ----
+node_modules/
+.next/
+out/
+build/
+dist/
+.turbo/
+*.tsbuildinfo
+next-env.d.ts
+
+# ---- test & coverage ----
+coverage/
+.nyc_output/
+playwright-report/
+test-results/
+blob-report/
+.playwright/
+
+# ---- logs ----
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# ---- editors & os ----
+.vscode/*
+!.vscode/extensions.json
+!.vscode/settings.json
+.idea/
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# ---- onedrive sync artifacts ----
+*.tmp
+~$*
+
+# ---- local scratch ----
+scratch/
+tmp/
+.cache/
+
+# ---- starter pack archive (source material, not versioned) ----
+# force-add with `git add -f` if you want it in history
+*.zip

@@ -1,0 +1,30 @@
+# Decisions and Open Questions
+
+## Approved direction (from product discussion)
+- Product: Where to Go — Find your kind of night.
+- Global platform, city-by-city rollout; Dubai first, Cairo second-market test.
+- Focus: live music and social dining experiences; date-specific atmosphere and explainable matching.
+- Agentic data collection with provenance, verification and human review.
+- Web-first MVP; no forced paid listing to appear in discovery.
+
+## Proposed, awaiting explicit approval
+- Next.js + TypeScript + PostgreSQL/PostGIS stack.
+- Hosting, auth, maps and queue providers.
+- Specific source connectors and licenses.
+- Pilot size, cost limits, staffing and legal/privacy approach.
+- Detailed UI identity, target audience, operator pricing and success thresholds.
+
+## ADR template
+ID | Question | Alternatives | Decision | Rationale | Owner | Date | Status | Revisit trigger.
+
+## Stop rules
+Do not interpret illustrative examples as approved commercial or engineering commitments. Record tradeoffs and ask before proceeding when material.
+
+## 2026-10-26 | Kickoff decision brief submitted
+`17_KICKOFF_DECISION_BRIEF.md` delivered against `prompts/01_PROJECT_KICKOFF.md`. No code written; no ADR files created yet (they are created per decision at approval).
+
+**Awaiting founder answers (brief §7):** Q1 stack/hosting and auth provider · Q2 spend ceiling · Q3 Arabic scope at pilot · Q4 rights posture for first connector · Q5 unknown/over-budget display policy.
+
+**Resolved spec conflicts applied as defaults** (brief §2, reversible on objection): C1 currency/timezone are per-market, doc `03` superseded on AED and Asia/Dubai · C2 event series split from occurrence per doc `14` · C3 three orthogonal claim state axes plus a derived confidence label · C4 `venue_attested` never presented as independently verified · C6 market-scoped venue slugs · C7 single canonical market plus visibility rows · C8 availability removed from MVP filters · C9 doc `15`/`CLAUDE.md` govern over doc `05` on live-collection timing · C11 fixtures generated against a seeded clock.
+
+**Open decisions pending approval:** D1–D8 in brief §3. Status for all: Proposed.

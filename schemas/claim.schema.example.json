@@ -1,0 +1,13 @@
+{
+  "claim_id": "uuid",
+  "subject_type": "venue|event_occurrence",
+  "subject_id": "uuid",
+  "attribute_key": "music.genre",
+  "value": ["jazz"],
+  "source": {"provider": "fictional_fixture", "url": null, "evidence_field": "music.genre"},
+  "observed_at": "2026-10-26T12:00:00Z",
+  "verification_state": "source_claimed",
+  "verification_method": null,
+  "expires_at": "2026-11-02T12:00:00Z",
+  "license_profile": "fixture_only"
+}

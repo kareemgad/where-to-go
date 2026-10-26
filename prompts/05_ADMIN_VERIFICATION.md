@@ -1,0 +1,1 @@
+Implement Phase 3: claim/evidence persistence, versioned verification state machine, admin review queue, market-scoped RBAC, conflicting claims, audit trail, and publish/rollback controls. Use fictional conflicting event fixtures. A model-generated claim must not auto-become verified. Demonstrate one approved and one rejected update with tests; stop before live ingestion.
