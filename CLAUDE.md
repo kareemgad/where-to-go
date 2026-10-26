@@ -37,7 +37,12 @@ Database (`where-to-go-dev`, ref `lujwjhrqiksrpdgsblad`). The Supabase CLI is no
 npm run db:check         # connectivity, extensions, PostGIS round-trip; prints no secrets
 npm run db:status        # local vs applied migrations, reports drift
 npm run db:migrate       # apply pending migrations, one transaction each
-npm run db:verify        # exercise market rules against the DB, always rolled back
+npm run db:seed          # rebuild the fictional fixture world (refuses if real data exists)
+npm run db:verify        # DB rules + TS/SQL confidence-label parity, always rolled back
+npm run db:handoffs      # booking handoff counts (clicks, never bookings)
+npm run demo:search      # the vertical slice end to end, both markets, from the CLI
 ```
+
+`FIXTURE_CLOCK=2026-10-26T12:00:00Z` pins the seeded clock so fixture dates and demo output are reproducible; omit it to use the real current time.
 
 Migration files are `supabase/migrations/<14-digit version>_<snake_case>.sql`. The version is the identity, the repository is the source of truth, and an applied migration is history - fix a mistake with a new migration, never by editing an applied one. Seed commands do not exist yet.

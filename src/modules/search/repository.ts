@@ -22,23 +22,10 @@ import type { Clock } from '@/lib/time';
 import type { EvidenceState, SourceAuthority } from '@/modules/evidence/confidence';
 import type { Attributed, Candidate, SearchRequest } from './types';
 
-/** Market configuration, read from the record rather than assumed (ADR-009). */
-export interface MarketRecord {
-  readonly id: string;
-  readonly slug: string;
-  readonly timezone: string;
-  readonly currency: string;
-  readonly defaultLocale: string;
-}
-
-export async function loadMarketBySlug(sql: Sql, slug: string): Promise<MarketRecord | null> {
-  const rows = await sql<MarketRecord[]>`
-    select id, slug, timezone, currency, default_locale as "defaultLocale"
-    from markets
-    where slug = ${slug} and status = 'live'
-  `;
-  return rows[0] ?? null;
-}
+// Market configuration lives in its own module: it is read by the UI and the
+// handoff route as well as by search (ADR-009).
+export { loadMarketBySlug, listLiveMarkets } from '@/modules/markets/queries';
+export type { MarketRecord } from '@/modules/markets/queries';
 
 const attributed = <T>(value: T | null, state: string): Attributed<T> => ({
   value,

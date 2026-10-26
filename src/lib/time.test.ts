@@ -7,6 +7,7 @@ import {
   assertValidTimezone,
   crossesMidnight,
   fixedClock,
+  formatLocalRange,
   hasEnded,
   localWeekday,
   minutesUntilStart,
@@ -234,5 +235,64 @@ describe('weekday resolution for rot-free fixtures (brief C11)', () => {
       timezone: DUBAI,
     }).occurrence;
     expect(localWeekday(occurrence)).toBe(5);
+  });
+});
+
+describe('formatLocalRange', () => {
+  const sameDay = occurrenceFromLocal({
+    date: FRIDAY,
+    startTime: '20:00',
+    durationMinutes: 180,
+    timezone: DUBAI,
+  }).occurrence;
+
+  const overnight = occurrenceFromLocal({
+    date: FRIDAY,
+    startTime: '22:00',
+    durationMinutes: 240,
+    timezone: DUBAI,
+  }).occurrence;
+
+  it('formats both ends the same way', () => {
+    // The bug this guards against produced "10:00 PM - 02:00": one end through
+    // Intl, the other printed raw from the stored column.
+    const rendered = formatLocalRange(sameDay, 'en-AE');
+    expect(rendered).toContain('–');
+    const [, after] = rendered.split('–') as [string, string];
+    // Whatever the locale's clock convention, both ends share it.
+    expect(/\d/.test(after)).toBe(true);
+    expect(after).not.toMatch(/^\s*\d{2}:\d{2}\s*$/);
+  });
+
+  it('names the following date when the show runs past midnight', () => {
+    // "ends 2:00 AM" without a date is ambiguous on exactly the nights people
+    // care about.
+    const rendered = formatLocalRange(overnight, 'en-AE');
+    expect(crossesMidnight(overnight)).toBe(true);
+    // FRIDAY is 13 November, so the set ends on the 14th.
+    expect(rendered).toContain('14');
+    expect(rendered.match(/2026/g)?.length).toBe(2);
+  });
+
+  it('omits the second date when the show ends the same day', () => {
+    const rendered = formatLocalRange(sameDay, 'en-AE');
+    expect(rendered.match(/2026/g)?.length).toBe(1);
+  });
+
+  it('renders in the requested locale', () => {
+    expect(formatLocalRange(sameDay, 'en-AE')).not.toBe(formatLocalRange(sameDay, 'ar-EG'));
+  });
+
+  it('renders in the venue zone, not the system zone', () => {
+    const cairo = occurrenceFromLocal({
+      date: FRIDAY,
+      startTime: '20:00',
+      durationMinutes: 180,
+      timezone: CAIRO,
+    }).occurrence;
+    // Same wall clock, different zones, so the instants differ while both
+    // render their own local 8pm.
+    expect(formatLocalRange(cairo, 'en-AE')).toBe(formatLocalRange(sameDay, 'en-AE'));
+    expect(cairo.startsAt.toISOString()).not.toBe(sameDay.startsAt.toISOString());
   });
 });

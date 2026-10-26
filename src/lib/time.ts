@@ -295,6 +295,33 @@ export function formatLocal(
     .toLocaleString(options ?? DateTime.DATETIME_MED);
 }
 
+/**
+ * The occurrence as one locale-formatted line: date, start and end.
+ *
+ * Formatting both ends through Intl rather than printing the stored HH:mm for
+ * one of them. Mixing the two produces "10:00 PM – 02:00", which looks like a
+ * bug to a reader and is one. A show finishing on the following local date says
+ * so, because "ends 02:00" without a date is ambiguous on exactly the nights
+ * people care about.
+ */
+export function formatLocalRange(occurrence: OccurrenceTime, locale: string): string {
+  const start = DateTime.fromJSDate(occurrence.startsAt)
+    .setZone(occurrence.timezone)
+    .setLocale(locale);
+  const end = DateTime.fromJSDate(occurrence.endsAt)
+    .setZone(occurrence.timezone)
+    .setLocale(locale);
+
+  const date = start.toLocaleString({ dateStyle: 'medium' });
+  const startTime = start.toLocaleString({ timeStyle: 'short' });
+  const endTime = end.toLocaleString({ timeStyle: 'short' });
+
+  if (crossesMidnight(occurrence)) {
+    return `${date} ${startTime} – ${end.toLocaleString({ dateStyle: 'medium' })} ${endTime}`;
+  }
+  return `${date} ${startTime} – ${endTime}`;
+}
+
 /** The local weekday index (1 = Monday … 7 = Sunday) in the venue's zone. */
 export function localWeekday(occurrence: OccurrenceTime): number {
   return DateTime.fromJSDate(occurrence.startsAt).setZone(occurrence.timezone).weekday;
