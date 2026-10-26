@@ -2,6 +2,7 @@
   "name": "where-to-go",
   "version": "0.1.0",
   "private": true,
+  "type": "module",
   "description": "Global experience intelligence platform. Find your kind of night.",
   "engines": {
     "node": ">=20.9.0"
@@ -18,7 +19,7 @@
     "db:check": "node --env-file-if-exists=.env.local scripts/check-db.mjs",
     "db:status": "node --env-file-if-exists=.env.local scripts/migrate.mjs --status",
     "db:migrate": "node --env-file-if-exists=.env.local scripts/migrate.mjs",
-    "db:verify": "node --env-file-if-exists=.env.local scripts/verify-market-rules.mjs && node --env-file-if-exists=.env.local scripts/verify-occurrence-rules.mjs",
+    "db:verify": "node --env-file-if-exists=.env.local scripts/verify-market-rules.mjs && node --env-file-if-exists=.env.local scripts/verify-occurrence-rules.mjs && node --env-file-if-exists=.env.local scripts/verify-confidence-parity.ts",
     "verify": "npm run typecheck && npm run lint && npm run guard:market && npm run test"
   },
   "dependencies": {

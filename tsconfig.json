@@ -20,6 +20,9 @@
     "noUnusedParameters": true,
     "forceConsistentCasingInFileNames": true,
     "noEmit": true,
+    // Node runs scripts/*.ts directly by stripping types, which requires the
+    // .ts extension in the import specifier. Valid only alongside noEmit.
+    "allowImportingTsExtensions": true,
     "incremental": true,
     "esModuleInterop": true,
     "resolveJsonModule": true,
