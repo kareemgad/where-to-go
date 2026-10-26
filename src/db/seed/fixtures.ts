@@ -1,0 +1,754 @@
+/**
+ * Fictional fixture definitions for both markets.
+ *
+ * Every record here is invented. None of it describes a real business, and
+ * every venue carries is_demo_data so the database — not just this file — knows
+ * it must never be presented as a real recommendation (doc 07,
+ * fixtures/README).
+ *
+ * Dates are expressed as weekday offsets resolved against a seeded clock, never
+ * as literals. Doc 07's five fixtures say "Friday"; the illustrative event in
+ * doc 03 was dated 2026-11-05 and was already ten days from expiry when it was
+ * written. A fixture with a literal date is a test that silently stops testing
+ * anything (brief C11).
+ *
+ * This file is exempt from the market-literal guard, because naming AED,
+ * Africa/Cairo and the rest is the entire point of seed data. Everything
+ * outside src/db/seed reads these values from the market record.
+ */
+
+import type { EvidenceState, SourceAuthority } from '@/modules/evidence/confidence';
+
+export const WEEKDAY = {
+  monday: 1,
+  tuesday: 2,
+  wednesday: 3,
+  thursday: 4,
+  friday: 5,
+  saturday: 6,
+  sunday: 7,
+} as const;
+
+export interface MarketFixture {
+  slug: string;
+  referenceName: string;
+  countryIso2: string;
+  timezone: string;
+  currency: string;
+  defaultLocale: string;
+  locales: { locale: string; isDefault: boolean }[];
+  /** Rough operating envelope: [minLon, minLat, maxLon, maxLat]. Fictional. */
+  envelope: [number, number, number, number];
+  priority: number;
+  locality: { referenceName: string; names: { locale: string; name: string }[] };
+  neighborhoods: {
+    key: string;
+    referenceName: string;
+    names: { locale: string; name: string }[];
+    centroid: [number, number];
+  }[];
+}
+
+export const COUNTRIES = [
+  { iso2: 'AE', iso3: 'ARE', referenceName: 'United Arab Emirates' },
+  { iso2: 'EG', iso3: 'EGY', referenceName: 'Egypt' },
+] as const;
+
+export const MARKETS: MarketFixture[] = [
+  {
+    slug: 'dubai',
+    referenceName: 'Dubai',
+    countryIso2: 'AE',
+    timezone: 'Asia/Dubai',
+    currency: 'AED',
+    defaultLocale: 'en-AE',
+    locales: [
+      { locale: 'en-AE', isDefault: true },
+      { locale: 'ar-AE', isDefault: false },
+    ],
+    envelope: [55.05, 24.85, 55.55, 25.45],
+    priority: 100,
+    locality: {
+      referenceName: 'Dubai',
+      names: [
+        { locale: 'en-AE', name: 'Dubai' },
+        { locale: 'ar-AE', name: 'دبي' },
+      ],
+    },
+    neighborhoods: [
+      {
+        key: 'dxb-marina',
+        referenceName: 'Marina District (fictional)',
+        names: [
+          { locale: 'en-AE', name: 'Marina District' },
+          { locale: 'ar-AE', name: 'حي المارينا' },
+        ],
+        centroid: [55.14, 25.08],
+      },
+      {
+        key: 'dxb-oldtown',
+        referenceName: 'Old Town Quarter (fictional)',
+        names: [
+          { locale: 'en-AE', name: 'Old Town Quarter' },
+          { locale: 'ar-AE', name: 'حي المدينة القديمة' },
+        ],
+        centroid: [55.3, 25.22],
+      },
+    ],
+  },
+  {
+    slug: 'cairo',
+    referenceName: 'Cairo',
+    countryIso2: 'EG',
+    // Africa/Cairo observes DST, unlike Asia/Dubai. That difference is the
+    // point of the second market: a bug that assumes a fixed offset passes
+    // every Dubai test and fails here.
+    timezone: 'Africa/Cairo',
+    currency: 'EGP',
+    defaultLocale: 'ar-EG',
+    locales: [
+      { locale: 'ar-EG', isDefault: true },
+      { locale: 'en-EG', isDefault: false },
+    ],
+    envelope: [31.1, 29.9, 31.5, 30.2],
+    priority: 100,
+    locality: {
+      referenceName: 'Cairo',
+      names: [
+        { locale: 'ar-EG', name: 'القاهرة' },
+        { locale: 'en-EG', name: 'Cairo' },
+      ],
+    },
+    neighborhoods: [
+      {
+        key: 'cai-riverside',
+        referenceName: 'Riverside Gardens (fictional)',
+        names: [
+          { locale: 'ar-EG', name: 'حدائق النيل' },
+          { locale: 'en-EG', name: 'Riverside Gardens' },
+        ],
+        centroid: [31.22, 30.04],
+      },
+    ],
+  },
+];
+
+export type OccurrenceFixture = {
+  /** Weekday the night falls on, resolved against the seeded clock. */
+  weekday: number;
+  /** Weeks to add; negative puts the night in the past. */
+  weekOffset?: number;
+  startTime: string;
+  durationMinutes: number;
+  title: string;
+  genreTags: string[];
+  performanceType:
+    | 'live_band'
+    | 'dj'
+    | 'solo_instrumentalist'
+    | 'piano'
+    | 'open_mic'
+    | 'acoustic_set'
+    | 'other';
+  artist?: string;
+  state: 'scheduled' | 'confirmed' | 'postponed' | 'cancelled' | 'completed';
+  evidenceState: EvidenceState;
+  sourceAuthority: SourceAuthority | null;
+  sourceExpression: string | null;
+};
+
+export interface VenueFixture {
+  marketSlug: string;
+  slug: string;
+  referenceName: string;
+  names: { locale: string; name: string }[];
+  neighborhoodKey: string;
+  point: [number, number];
+  status: 'active' | 'temporarily_closed' | 'permanently_closed';
+  bookingUrl: string | null;
+  /** Why this fixture exists. Printed by the seeder so the set stays legible. */
+  purpose: string;
+  experience: {
+    energy?: number;
+    conversationFriendliness?: number;
+    lighting?: number;
+    seatingComfort?: number;
+    noiseBand?: 'quiet' | 'moderate' | 'loud';
+    outdoorSeating?: boolean;
+    familyFriendly?: boolean;
+    wheelchairAccessible?: boolean;
+    evidenceState: EvidenceState;
+    observationCount: number;
+  };
+  /** Decimal strings, parsed through lib/money so no float ever touches them. */
+  price: {
+    low: string;
+    high: string;
+    basis: 'per_person' | 'per_entry' | 'minimum_spend' | 'per_group';
+    includesTax: boolean;
+    includesServiceCharge: boolean;
+    evidenceState: EvidenceState;
+  } | null;
+  series: {
+    title: string;
+    recurrenceRule: string | null;
+    genreTags: string[];
+    performanceType: OccurrenceFixture['performanceType'];
+  } | null;
+  occurrences: OccurrenceFixture[];
+}
+
+const confirmedByVenue = {
+  state: 'confirmed',
+  evidenceState: 'source_claimed',
+  sourceAuthority: 'venue_attested',
+} as const;
+
+export const VENUES: VenueFixture[] = [
+  // ---- doc 07's five canonical fixtures --------------------------------
+  {
+    marketSlug: 'dubai',
+    slug: 'jazz-loft-test',
+    referenceName: 'Jazz Loft Test (fictional)',
+    names: [
+      { locale: 'en-AE', name: 'Jazz Loft Test' },
+      { locale: 'ar-AE', name: 'جاز لوفت' },
+    ],
+    neighborhoodKey: 'dxb-marina',
+    point: [55.141, 25.081],
+    status: 'active',
+    bookingUrl: 'https://example.invalid/jazz-loft/reserve',
+    purpose: 'The expected rank-1 match: live jazz on the queried Friday, inside budget.',
+    experience: {
+      energy: 3,
+      conversationFriendliness: 3,
+      lighting: 2,
+      seatingComfort: 4,
+      noiseBand: 'moderate',
+      outdoorSeating: false,
+      familyFriendly: false,
+      wheelchairAccessible: true,
+      evidenceState: 'source_claimed',
+      observationCount: 4,
+    },
+    price: {
+      low: '180',
+      high: '260',
+      basis: 'per_person',
+      includesTax: true,
+      includesServiceCharge: false,
+      evidenceState: 'source_claimed',
+    },
+    series: {
+      title: 'Friday Jazz Sessions (fictional)',
+      recurrenceRule: 'FREQ=WEEKLY;BYDAY=FR',
+      genreTags: ['jazz'],
+      performanceType: 'live_band',
+    },
+    occurrences: [
+      {
+        weekday: WEEKDAY.friday,
+        startTime: '20:00',
+        durationMinutes: 180,
+        title: 'Live Jazz Quartet (fictional)',
+        genreTags: ['jazz'],
+        performanceType: 'live_band',
+        artist: 'The Test Quartet',
+        sourceExpression: 'Fri 8pm - 11pm',
+        ...confirmedByVenue,
+      },
+    ],
+  },
+  {
+    marketSlug: 'dubai',
+    slug: 'quiet-courtyard-test',
+    referenceName: 'Quiet Courtyard Test (fictional)',
+    names: [{ locale: 'en-AE', name: 'Quiet Courtyard Test' }],
+    neighborhoodKey: 'dxb-oldtown',
+    point: [55.301, 25.221],
+    status: 'active',
+    bookingUrl: 'https://example.invalid/quiet-courtyard/reserve',
+    purpose:
+      'Must be excluded when live music is required (AC01), despite the best conversation score in the set.',
+    experience: {
+      energy: 1,
+      conversationFriendliness: 5,
+      lighting: 3,
+      seatingComfort: 4,
+      noiseBand: 'quiet',
+      outdoorSeating: true,
+      familyFriendly: true,
+      wheelchairAccessible: true,
+      evidenceState: 'corroborated',
+      observationCount: 9,
+    },
+    price: {
+      low: '120',
+      high: '220',
+      basis: 'per_person',
+      includesTax: true,
+      includesServiceCharge: true,
+      evidenceState: 'corroborated',
+    },
+    series: null,
+    occurrences: [],
+  },
+  {
+    marketSlug: 'dubai',
+    slug: 'rock-stage-test',
+    referenceName: 'Rock Stage Test (fictional)',
+    names: [{ locale: 'en-AE', name: 'Rock Stage Test' }],
+    neighborhoodKey: 'dxb-marina',
+    point: [55.146, 25.084],
+    status: 'active',
+    bookingUrl: 'https://example.invalid/rock-stage/reserve',
+    purpose:
+      'Price band straddles a 300 ceiling: needs_confirmation, never silently "within budget" (brief C5).',
+    experience: {
+      energy: 5,
+      conversationFriendliness: 1,
+      lighting: 2,
+      seatingComfort: 2,
+      noiseBand: 'loud',
+      outdoorSeating: false,
+      familyFriendly: false,
+      wheelchairAccessible: false,
+      evidenceState: 'source_claimed',
+      observationCount: 2,
+    },
+    price: {
+      low: '220',
+      high: '350',
+      basis: 'per_person',
+      includesTax: false,
+      includesServiceCharge: false,
+      evidenceState: 'source_claimed',
+    },
+    series: null,
+    occurrences: [
+      {
+        weekday: WEEKDAY.friday,
+        startTime: '21:00',
+        durationMinutes: 180,
+        title: 'Rock Night (fictional)',
+        genreTags: ['rock'],
+        performanceType: 'live_band',
+        sourceExpression: 'Fridays 9pm',
+        ...confirmedByVenue,
+      },
+    ],
+  },
+  {
+    marketSlug: 'dubai',
+    slug: 'unknown-price-test',
+    referenceName: 'Unknown Price Test (fictional)',
+    names: [
+      { locale: 'en-AE', name: 'Unknown Price Test' },
+      { locale: 'ar-AE', name: 'سعر غير معروف' },
+    ],
+    neighborhoodKey: 'dxb-oldtown',
+    point: [55.305, 25.219],
+    status: 'active',
+    bookingUrl: null,
+    purpose:
+      'Event verified but no price evidence at all: needs_confirmation for a different reason than Rock Stage.',
+    experience: {
+      energy: 3,
+      conversationFriendliness: 4,
+      noiseBand: 'moderate',
+      outdoorSeating: true,
+      evidenceState: 'source_claimed',
+      observationCount: 1,
+    },
+    // No price row at all. An unknown price is a missing row, never nulls.
+    price: null,
+    series: null,
+    occurrences: [
+      {
+        weekday: WEEKDAY.friday,
+        startTime: '20:30',
+        durationMinutes: 150,
+        title: 'Arabic Music Evening (fictional)',
+        genreTags: ['arabic', 'oud'],
+        performanceType: 'live_band',
+        sourceExpression: 'Friday evening',
+        state: 'confirmed',
+        evidenceState: 'verified',
+        sourceAuthority: 'editor_checked',
+      },
+    ],
+  },
+  {
+    marketSlug: 'dubai',
+    slug: 'expired-gig-test',
+    referenceName: 'Expired Gig Test (fictional)',
+    names: [{ locale: 'en-AE', name: 'Expired Gig Test' }],
+    neighborhoodKey: 'dxb-marina',
+    point: [55.139, 25.078],
+    status: 'active',
+    bookingUrl: 'https://example.invalid/expired-gig/reserve',
+    purpose: 'Only a past occurrence. Must never appear as upcoming (AC02).',
+    experience: {
+      energy: 4,
+      conversationFriendliness: 2,
+      noiseBand: 'loud',
+      evidenceState: 'source_claimed',
+      observationCount: 1,
+    },
+    price: {
+      low: '200',
+      high: '250',
+      basis: 'per_person',
+      includesTax: true,
+      includesServiceCharge: false,
+      evidenceState: 'source_claimed',
+    },
+    series: null,
+    occurrences: [
+      {
+        weekday: WEEKDAY.thursday,
+        weekOffset: -1,
+        startTime: '21:00',
+        durationMinutes: 180,
+        title: 'Last Week Thursday Session (fictional)',
+        genreTags: ['jazz'],
+        performanceType: 'live_band',
+        sourceExpression: 'Thu 9pm',
+        ...confirmedByVenue,
+      },
+    ],
+  },
+
+  // ---- edge cases fixtures/README requires -----------------------------
+  {
+    marketSlug: 'dubai',
+    slug: 'midnight-crossing-test',
+    referenceName: 'Midnight Crossing Test (fictional)',
+    names: [{ locale: 'en-AE', name: 'Midnight Crossing Test' }],
+    neighborhoodKey: 'dxb-marina',
+    point: [55.148, 25.086],
+    status: 'active',
+    bookingUrl: 'https://example.invalid/midnight/reserve',
+    purpose: 'A 22:00-02:00 set must match a Friday evening query, not fall between days.',
+    experience: {
+      energy: 4,
+      conversationFriendliness: 2,
+      noiseBand: 'loud',
+      outdoorSeating: true,
+      evidenceState: 'source_claimed',
+      observationCount: 3,
+    },
+    price: {
+      low: '150',
+      high: '240',
+      basis: 'per_person',
+      includesTax: true,
+      includesServiceCharge: false,
+      evidenceState: 'source_claimed',
+    },
+    series: null,
+    occurrences: [
+      {
+        weekday: WEEKDAY.friday,
+        startTime: '22:00',
+        durationMinutes: 240,
+        title: 'Late Set (fictional)',
+        genreTags: ['jazz', 'soul'],
+        performanceType: 'live_band',
+        sourceExpression: 'Fri 10pm til late',
+        ...confirmedByVenue,
+      },
+    ],
+  },
+  {
+    marketSlug: 'dubai',
+    slug: 'cancelled-night-test',
+    referenceName: 'Cancelled Night Test (fictional)',
+    names: [{ locale: 'en-AE', name: 'Cancelled Night Test' }],
+    neighborhoodKey: 'dxb-oldtown',
+    point: [55.298, 25.224],
+    status: 'active',
+    bookingUrl: 'https://example.invalid/cancelled/reserve',
+    purpose: 'Cancelled occurrence must be excluded and stay excluded (doc 16 #6).',
+    experience: {
+      conversationFriendliness: 3,
+      noiseBand: 'moderate',
+      evidenceState: 'source_claimed',
+      observationCount: 1,
+    },
+    price: {
+      low: '160',
+      high: '230',
+      basis: 'per_person',
+      includesTax: true,
+      includesServiceCharge: false,
+      evidenceState: 'source_claimed',
+    },
+    series: null,
+    occurrences: [
+      {
+        weekday: WEEKDAY.friday,
+        startTime: '20:00',
+        durationMinutes: 180,
+        title: 'Cancelled Jazz Night (fictional)',
+        genreTags: ['jazz'],
+        performanceType: 'live_band',
+        sourceExpression: 'Fri 8pm',
+        state: 'cancelled',
+        evidenceState: 'source_claimed',
+        sourceAuthority: 'venue_attested',
+      },
+    ],
+  },
+  {
+    marketSlug: 'dubai',
+    slug: 'scheduled-only-test',
+    referenceName: 'Scheduled Only Test (fictional)',
+    names: [{ locale: 'en-AE', name: 'Scheduled Only Test' }],
+    neighborhoodKey: 'dxb-marina',
+    point: [55.152, 25.09],
+    status: 'active',
+    bookingUrl: 'https://example.invalid/scheduled-only/reserve',
+    purpose:
+      'The single most important exclusion: a weekly rule with no date-specific evidence is NOT recommendable (ADR-010).',
+    experience: {
+      energy: 3,
+      conversationFriendliness: 3,
+      noiseBand: 'moderate',
+      evidenceState: 'source_claimed',
+      observationCount: 1,
+    },
+    price: {
+      low: '170',
+      high: '250',
+      basis: 'per_person',
+      includesTax: true,
+      includesServiceCharge: false,
+      evidenceState: 'source_claimed',
+    },
+    series: {
+      title: 'Weekly Live Music (fictional)',
+      recurrenceRule: 'FREQ=WEEKLY;BYDAY=FR',
+      genreTags: ['jazz'],
+      performanceType: 'live_band',
+    },
+    occurrences: [
+      {
+        weekday: WEEKDAY.friday,
+        startTime: '20:00',
+        durationMinutes: 180,
+        title: 'Weekly Live Music (fictional)',
+        genreTags: ['jazz'],
+        performanceType: 'live_band',
+        sourceExpression: 'live music every weekend',
+        // Materialised from the rule. No evidence for this date.
+        state: 'scheduled',
+        evidenceState: 'unknown',
+        sourceAuthority: null,
+      },
+    ],
+  },
+  {
+    marketSlug: 'dubai',
+    slug: 'conflicting-times-test',
+    referenceName: 'Conflicting Times Test (fictional)',
+    names: [{ locale: 'en-AE', name: 'Conflicting Times Test' }],
+    neighborhoodKey: 'dxb-oldtown',
+    point: [55.308, 25.216],
+    status: 'active',
+    bookingUrl: 'https://example.invalid/conflicting/reserve',
+    purpose:
+      'Two credible sources disagree on the start time. Must not be recommended and must not be silently resolved (doc 16 #5).',
+    experience: {
+      conversationFriendliness: 3,
+      noiseBand: 'moderate',
+      evidenceState: 'source_claimed',
+      observationCount: 1,
+    },
+    price: {
+      low: '190',
+      high: '260',
+      basis: 'per_person',
+      includesTax: true,
+      includesServiceCharge: false,
+      evidenceState: 'source_claimed',
+    },
+    series: null,
+    occurrences: [
+      {
+        weekday: WEEKDAY.friday,
+        startTime: '19:00',
+        durationMinutes: 180,
+        title: 'Disputed Start Time (fictional)',
+        genreTags: ['jazz'],
+        performanceType: 'live_band',
+        sourceExpression: 'Fri 7pm (venue page) / Fri 9pm (listing)',
+        state: 'scheduled',
+        evidenceState: 'conflicting',
+        sourceAuthority: 'venue_attested',
+      },
+    ],
+  },
+  {
+    marketSlug: 'dubai',
+    slug: 'closed-venue-test',
+    referenceName: 'Closed Venue Test (fictional)',
+    names: [{ locale: 'en-AE', name: 'Closed Venue Test' }],
+    neighborhoodKey: 'dxb-marina',
+    point: [55.137, 25.075],
+    status: 'permanently_closed',
+    bookingUrl: null,
+    purpose: 'A closed venue is excluded even with a confirmed occurrence on the books.',
+    experience: {
+      conversationFriendliness: 4,
+      evidenceState: 'stale',
+      observationCount: 1,
+    },
+    price: null,
+    series: null,
+    occurrences: [
+      {
+        weekday: WEEKDAY.friday,
+        startTime: '20:00',
+        durationMinutes: 180,
+        title: 'Jazz Night (fictional, venue since closed)',
+        genreTags: ['jazz'],
+        performanceType: 'live_band',
+        sourceExpression: 'Fri 8pm',
+        ...confirmedByVenue,
+      },
+    ],
+  },
+  {
+    marketSlug: 'dubai',
+    slug: 'accessibility-unknown-test',
+    referenceName: 'Accessibility Unknown Test (fictional)',
+    names: [{ locale: 'en-AE', name: 'Accessibility Unknown Test' }],
+    neighborhoodKey: 'dxb-oldtown',
+    point: [55.295, 25.227],
+    status: 'active',
+    bookingUrl: 'https://example.invalid/accessibility-unknown/reserve',
+    purpose:
+      'Wheelchair access unknown. With accessibility required this must be needs_confirmation, never a silent pass (doc 13).',
+    experience: {
+      energy: 2,
+      conversationFriendliness: 4,
+      noiseBand: 'quiet',
+      // wheelchairAccessible deliberately absent: unknown, not false.
+      evidenceState: 'source_claimed',
+      observationCount: 2,
+    },
+    price: {
+      low: '140',
+      high: '210',
+      basis: 'per_person',
+      includesTax: true,
+      includesServiceCharge: false,
+      evidenceState: 'source_claimed',
+    },
+    series: null,
+    occurrences: [
+      {
+        weekday: WEEKDAY.friday,
+        startTime: '19:30',
+        durationMinutes: 150,
+        title: 'Acoustic Evening (fictional)',
+        genreTags: ['acoustic', 'folk'],
+        performanceType: 'acoustic_set',
+        sourceExpression: 'Fri 7:30pm',
+        ...confirmedByVenue,
+      },
+    ],
+  },
+
+  // ---- Cairo: the second-market architecture test ----------------------
+  {
+    marketSlug: 'cairo',
+    slug: 'nile-oud-house-test',
+    referenceName: 'Nile Oud House Test (fictional)',
+    names: [
+      { locale: 'ar-EG', name: 'بيت العود على النيل' },
+      { locale: 'en-EG', name: 'Nile Oud House Test' },
+    ],
+    neighborhoodKey: 'cai-riverside',
+    point: [31.221, 30.041],
+    status: 'active',
+    bookingUrl: 'https://example.invalid/nile-oud/reserve',
+    purpose:
+      'Arabic name, EGP prices, Africa/Cairo local times. Proves the slice works with no code change (doc 16 #3).',
+    experience: {
+      energy: 3,
+      conversationFriendliness: 4,
+      lighting: 2,
+      seatingComfort: 4,
+      noiseBand: 'moderate',
+      outdoorSeating: true,
+      familyFriendly: true,
+      wheelchairAccessible: true,
+      evidenceState: 'source_claimed',
+      observationCount: 5,
+    },
+    price: {
+      // EGP, not a converted AED figure. FX is presentation only (doc 10).
+      low: '900',
+      high: '1500',
+      basis: 'per_person',
+      includesTax: true,
+      includesServiceCharge: false,
+      evidenceState: 'source_claimed',
+    },
+    series: {
+      title: 'ليالي العود (fictional)',
+      recurrenceRule: 'FREQ=WEEKLY;BYDAY=FR',
+      genreTags: ['arabic', 'oud'],
+      performanceType: 'live_band',
+    },
+    occurrences: [
+      {
+        weekday: WEEKDAY.friday,
+        startTime: '21:00',
+        durationMinutes: 180,
+        title: 'ليلة عود (fictional)',
+        genreTags: ['arabic', 'oud'],
+        performanceType: 'live_band',
+        artist: 'فرقة الاختبار',
+        sourceExpression: 'الجمعة ٩ مساءً',
+        ...confirmedByVenue,
+      },
+    ],
+  },
+  {
+    marketSlug: 'cairo',
+    slug: 'garden-tea-room-test',
+    referenceName: 'Garden Tea Room Test (fictional)',
+    names: [
+      { locale: 'ar-EG', name: 'غرفة شاي الحديقة' },
+      { locale: 'en-EG', name: 'Garden Tea Room Test' },
+    ],
+    neighborhoodKey: 'cai-riverside',
+    point: [31.225, 30.038],
+    status: 'active',
+    bookingUrl: null,
+    purpose: 'Cairo quiet option with no live music: the Cairo mirror of Quiet Courtyard.',
+    experience: {
+      energy: 1,
+      conversationFriendliness: 5,
+      noiseBand: 'quiet',
+      outdoorSeating: true,
+      familyFriendly: true,
+      wheelchairAccessible: false,
+      evidenceState: 'source_claimed',
+      observationCount: 2,
+    },
+    price: {
+      low: '400',
+      high: '700',
+      basis: 'per_person',
+      includesTax: true,
+      includesServiceCharge: false,
+      evidenceState: 'source_claimed',
+    },
+    series: null,
+    occurrences: [],
+  },
+];

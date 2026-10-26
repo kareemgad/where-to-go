@@ -341,7 +341,7 @@ try {
     // ---- claims: evidence anchors and verification -------------------------
     const [provider] = await tx`
       insert into source_providers (key, display_name, storage_policy, allowed_fields)
-      values ('fictional_fixture', 'Fictional Fixture', 'canonical_ok', '{}')
+      values ('verify_probe', 'Verification Probe (fictional)', 'canonical_ok', '{}')
       returning id
     `;
     const [doc] = await tx`

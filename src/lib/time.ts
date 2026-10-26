@@ -230,6 +230,24 @@ function windowInterval(window: SearchWindow): Interval {
 }
 
 /**
+ * The window's absolute bounds, for pushing the date filter into SQL rather
+ * than fetching every occurrence and filtering in memory. Same late-night
+ * rollover rule as overlapsWindow, so the two cannot disagree about what
+ * "Friday 22:00 to 02:00" means.
+ */
+export function searchWindowBounds(window: SearchWindow): { startsAt: Date; endsAt: Date } {
+  const interval = windowInterval(window);
+  const start = interval.start;
+  const end = interval.end;
+  if (start === null || end === null) {
+    throw new InvalidTimeError(
+      `Search window ${window.date} ${window.fromTime}-${window.toTime} in ${window.timezone} is not a valid interval.`,
+    );
+  }
+  return { startsAt: start.toUTC().toJSDate(), endsAt: end.toUTC().toJSDate() };
+}
+
+/**
  * Does the occurrence overlap the window at all?
  *
  * Overlap, not containment: a set running 20:00–23:00 is a legitimate answer to
