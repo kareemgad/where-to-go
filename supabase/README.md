@@ -39,3 +39,12 @@ Revisit only for offline work or destructive schema experiments.
 ADR-007 records UAE and Egypt data residency as unassessed. `eu-central-1` was chosen
 for consistency with the existing organisation projects and is appropriate for
 synthetic fixtures only. This needs a ruling before any real personal data.
+
+## Running without a .env.local
+The `db:*` scripts use Node's `--env-file-if-exists`, so they read `.env.local`
+when it is present and otherwise fall back to ambient environment variables.
+That is what makes them work in a cloud session or in CI, where configuration
+arrives as environment variables rather than as a file. The variables needed
+are listed in `.env.example`; the three that are secret
+(`SUPABASE_SERVICE_ROLE_KEY`, `DATABASE_URL`, `DIRECT_URL`) must be supplied by
+the environment and never committed.
