@@ -18,7 +18,7 @@
     "db:check": "node --env-file-if-exists=.env.local scripts/check-db.mjs",
     "db:status": "node --env-file-if-exists=.env.local scripts/migrate.mjs --status",
     "db:migrate": "node --env-file-if-exists=.env.local scripts/migrate.mjs",
-    "db:verify": "node --env-file-if-exists=.env.local scripts/verify-market-rules.mjs",
+    "db:verify": "node --env-file-if-exists=.env.local scripts/verify-market-rules.mjs && node --env-file-if-exists=.env.local scripts/verify-occurrence-rules.mjs",
     "verify": "npm run typecheck && npm run lint && npm run guard:market && npm run test"
   },
   "dependencies": {
