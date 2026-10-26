@@ -8,18 +8,26 @@ Decision recorded in `decisions/adr-002-auth-and-database.md`.
 them, never the other way round — if the two diverge, the repository wins and the
 drift is a bug.
 
-Create one, then push it:
+Filenames are `<14-digit version>_<snake_case_name>.sql`. The version is the
+identity. An applied migration is history: correct a mistake with a new
+migration, never by editing one that has run.
 
 ```
-npx supabase migration new <snake_case_name>
-npx supabase db push
+npm run db:status    # local vs applied, reports drift either way
+npm run db:migrate   # apply pending, one transaction each
+npm run db:verify    # exercise the rules against the DB, always rolled back
 ```
+
+## Why not the Supabase CLI
+The CLI needs an interactive `supabase login`, and this machine's install policy
+blocks the usual package route. `scripts/migrate.mjs` reads and writes the same
+`supabase_migrations.schema_migrations` table the CLI uses, so the two remain
+interchangeable - a later `supabase db push` sees exactly the same applied set.
 
 ## Local stack
-Not set up, and not needed. `npx supabase start` runs the full stack in Docker;
-Docker is not installed on this machine, and linking to the hosted dev project is
-both sufficient and faster. Revisit only if offline work or destructive schema
-experiments are needed.
+Not set up, and not needed. `supabase start` runs the full stack in Docker;
+Docker is absent here, and the hosted dev project is both sufficient and faster.
+Revisit only for offline work or destructive schema experiments.
 
 ## What is NOT in this repository
 - The database password. Reset it in Dashboard -> Project Settings -> Database.

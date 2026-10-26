@@ -15,6 +15,10 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "guard:market": "node scripts/guard-market-literals.mjs",
+    "db:check": "node --env-file=.env.local scripts/check-db.mjs",
+    "db:status": "node --env-file=.env.local scripts/migrate.mjs --status",
+    "db:migrate": "node --env-file=.env.local scripts/migrate.mjs",
+    "db:verify": "node --env-file=.env.local scripts/verify-market-rules.mjs",
     "verify": "npm run typecheck && npm run lint && npm run guard:market && npm run test"
   },
   "dependencies": {

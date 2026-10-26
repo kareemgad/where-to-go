@@ -18,4 +18,26 @@ Where to Go is a **global, multi-market experience intelligence platform**. Duba
 Next.js App Router, React, Tailwind, PostgreSQL/PostGIS, Zod, background job workers, provider-agnostic LLM integration, managed deployment.
 
 ## Developer commands
-After repository scaffold, update this section with exact install, dev, test, lint, typecheck, migration and seed commands. Do not invent commands before they exist.
+Node 24 (installed user-scope; MSI installs are blocked by org policy). Secrets live in `.env.local`, which is gitignored; `.env.example` is the contract.
+
+```
+npm install              # install dependencies
+npm run dev              # Next.js dev server
+npm run build            # production build
+npm run typecheck        # tsc --noEmit
+npm run lint             # eslint (flat config)
+npm run test             # vitest, offline and pure
+npm run guard:market     # T15 - fails on a market/currency/timezone/locale literal in shared logic
+npm run verify           # typecheck + lint + guard + test, the pre-commit gate
+```
+
+Database (`where-to-go-dev`, ref `lujwjhrqiksrpdgsblad`). The Supabase CLI is not used: it needs an interactive login, so the repository has its own runner that writes to the same `supabase_migrations.schema_migrations` table and stays interchangeable with `supabase db push`.
+
+```
+npm run db:check         # connectivity, extensions, PostGIS round-trip; prints no secrets
+npm run db:status        # local vs applied migrations, reports drift
+npm run db:migrate       # apply pending migrations, one transaction each
+npm run db:verify        # exercise market rules against the DB, always rolled back
+```
+
+Migration files are `supabase/migrations/<14-digit version>_<snake_case>.sql`. The version is the identity, the repository is the source of truth, and an applied migration is history - fix a mistake with a new migration, never by editing an applied one. Seed commands do not exist yet.
