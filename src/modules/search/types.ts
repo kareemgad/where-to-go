@@ -63,16 +63,51 @@ export interface Attributed<T> {
   readonly evidenceState: EvidenceState;
 }
 
+/** Four bands, so the UI never offers a distinction the data cannot make. */
+export type NoiseBand = 'quiet' | 'moderate' | 'lively' | 'loud';
+
 export interface CandidateExperience {
   readonly energy: Attributed<number>;
   readonly conversationFriendliness: Attributed<number>;
   readonly lighting: Attributed<number>;
   readonly seatingComfort: Attributed<number>;
-  readonly noiseBand: Attributed<'quiet' | 'moderate' | 'loud'>;
+  readonly noiseBand: Attributed<NoiseBand>;
   readonly outdoorSeating: Attributed<boolean>;
+  readonly indoorSeating: Attributed<boolean>;
   readonly familyFriendly: Attributed<boolean>;
   readonly wheelchairAccessible: Attributed<boolean>;
   readonly observationCount: number;
+}
+
+/**
+ * Policy facts a visitor may plan an evening around.
+ *
+ * Tri-state like everything else: `value === null` is an absence of evidence,
+ * never a quiet no. `minimumAge` of 0 is the verified statement that there is
+ * no minimum, which is a different and more useful claim than not knowing.
+ */
+export interface CandidatePolicies {
+  readonly licensed: Attributed<boolean>;
+  readonly alcoholFree: Attributed<boolean>;
+  readonly halal: Attributed<boolean>;
+  readonly takesReservations: Attributed<boolean>;
+  readonly openPastMidnight: Attributed<boolean>;
+  readonly minimumAge: Attributed<number>;
+}
+
+export type ExperienceFacet = 'music' | 'setting' | 'occasion' | 'activity';
+
+/** A tag asserted about a venue, with the evidence behind the assertion. */
+export interface CandidateTag {
+  readonly key: string;
+  readonly facet: ExperienceFacet;
+  readonly evidenceState: EvidenceState;
+}
+
+export interface CandidateKind {
+  readonly key: string;
+  readonly isPrimary: boolean;
+  readonly evidenceState: EvidenceState;
 }
 
 export interface CandidateOccurrence {
@@ -96,6 +131,11 @@ export interface Candidate {
   readonly neighborhoodId: string | null;
   readonly distanceMeters: number | null;
   readonly experience: CandidateExperience;
+  readonly policies: CandidatePolicies;
+  /** What this place is. Many kinds are possible; at most one is primary. */
+  readonly kinds: readonly CandidateKind[];
+  /** Experience tags asserted about the venue, each with its own evidence. */
+  readonly tags: readonly CandidateTag[];
   readonly price: { readonly band: PriceBand; readonly evidenceState: EvidenceState } | null;
   /** Null when the venue has no recommendable occurrence in the window. */
   readonly occurrence: CandidateOccurrence | null;

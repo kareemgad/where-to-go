@@ -47,6 +47,22 @@ export interface MarketFixture {
     names: { locale: string; name: string }[];
     centroid: [number, number];
   }[];
+  /**
+   * Vocabulary terms that exist only in this market (doc 10: a market extends
+   * the taxonomy, it does not fork it). The global set lives in migration
+   * 0024; these need a market id, so they are seeded.
+   */
+  experienceTagExtensions?: {
+    key: string;
+    facet: 'music' | 'setting' | 'occasion' | 'activity';
+    labels: { locale: string; label: string }[];
+  }[];
+  /**
+   * Band hours that differ from the global default here. Empty for both pilot
+   * markets, which is itself worth asserting: the mechanism works, and neither
+   * market has yet needed it.
+   */
+  timeBandOverrides?: { key: string; startsLocal: string; endsLocal: string }[];
 }
 
 export const COUNTRIES = [
@@ -65,6 +81,24 @@ export const MARKETS: MarketFixture[] = [
     locales: [
       { locale: 'en-AE', isDefault: true },
       { locale: 'ar-AE', isDefault: false },
+    ],
+    experienceTagExtensions: [
+      {
+        key: 'desert_setting',
+        facet: 'setting',
+        labels: [
+          { locale: 'en', label: 'Desert setting' },
+          { locale: 'ar', label: 'أجواء صحراوية' },
+        ],
+      },
+      {
+        key: 'beach_club',
+        facet: 'setting',
+        labels: [
+          { locale: 'en', label: 'Beach club' },
+          { locale: 'ar', label: 'نادي شاطئي' },
+        ],
+      },
     ],
     envelope: [55.05, 24.85, 55.55, 25.45],
     priority: 100,
@@ -109,6 +143,24 @@ export const MARKETS: MarketFixture[] = [
     locales: [
       { locale: 'ar-EG', isDefault: true },
       { locale: 'en-EG', isDefault: false },
+    ],
+    experienceTagExtensions: [
+      {
+        key: 'nile_view',
+        facet: 'setting',
+        labels: [
+          { locale: 'en', label: 'Nile view' },
+          { locale: 'ar', label: 'إطلالة على النيل' },
+        ],
+      },
+      {
+        key: 'oriental_tarab',
+        facet: 'music',
+        labels: [
+          { locale: 'en', label: 'Tarab' },
+          { locale: 'ar', label: 'طرب' },
+        ],
+      },
     ],
     envelope: [31.1, 29.9, 31.5, 30.2],
     priority: 100,
@@ -207,6 +259,7 @@ export interface VenueFixture {
     seatingComfort?: number;
     noiseBand?: 'quiet' | 'moderate' | 'loud';
     outdoorSeating?: boolean;
+    indoorSeating?: boolean;
     familyFriendly?: boolean;
     wheelchairAccessible?: boolean;
     evidenceState: EvidenceState;
@@ -230,7 +283,58 @@ export interface VenueFixture {
   occurrences: OccurrenceFixture[];
   /** Claims left in the queue for the review workflow to act on. */
   pendingClaims?: PendingClaimFixture[];
+  /** What sort of outing this is. At most one entry may be primary. */
+  kinds: KindFixture[];
+  /** Experience tags asserted about the venue, each with its own evidence. */
+  experienceTags: TaggedFixture[];
+  /**
+   * Policy facts. Anything omitted stays unknown, which is the honest default:
+   * a fixture has to opt in to every fact it asserts, exactly as a real venue
+   * would have to be sourced for it.
+   */
+  policies?: PolicyFixture;
 }
+
+export interface TaggedFixture {
+  key: string;
+  evidenceState: EvidenceState;
+  sourceAuthority: SourceAuthority;
+}
+
+export interface KindFixture extends TaggedFixture {
+  isPrimary?: boolean;
+}
+
+export type PolicyKey =
+  | 'licensed'
+  | 'alcoholFree'
+  | 'halal'
+  | 'takesReservations'
+  | 'openPastMidnight'
+  | 'minimumAge';
+
+export type PolicyFixture = Partial<
+  Record<PolicyKey, { value: boolean | number; evidenceState: EvidenceState }>
+>;
+
+/** The venue's own word for it: the commonest provenance in the fixture set. */
+const attested = (key: string): TaggedFixture => ({
+  key,
+  evidenceState: 'source_claimed',
+  sourceAuthority: 'venue_attested',
+});
+
+/** A fact an editor checked, for the handful of fixtures that need one. */
+const checked = (key: string): TaggedFixture => ({
+  key,
+  evidenceState: 'verified',
+  sourceAuthority: 'editor_checked',
+});
+
+const says = (
+  value: boolean | number,
+  evidenceState: EvidenceState = 'source_claimed',
+): { value: boolean | number; evidenceState: EvidenceState } => ({ value, evidenceState });
 
 const confirmedByVenue = {
   state: 'confirmed',
@@ -253,6 +357,14 @@ export const VENUES: VenueFixture[] = [
     status: 'active',
     bookingUrl: 'https://example.invalid/jazz-loft/reserve',
     purpose: 'The expected rank-1 match: live jazz on the queried Friday, inside budget.',
+    kinds: [{ ...attested('live_music_venue'), isPrimary: true }, attested('drinks_lounge')],
+    experienceTags: [checked('live_music'), checked('jazz'), attested('intimate_cosy'), attested('date_night')],
+    policies: {
+      licensed: says(true),
+      takesReservations: says(true),
+      openPastMidnight: says(true),
+      minimumAge: says(21, 'verified'),
+    },
     experience: {
       energy: 3,
       conversationFriendliness: 3,
@@ -304,6 +416,15 @@ export const VENUES: VenueFixture[] = [
     bookingUrl: 'https://example.invalid/quiet-courtyard/reserve',
     purpose:
       'Must be excluded when live music is required (AC01), despite the best conversation score in the set.',
+    kinds: [{ ...attested('restaurant'), isPrimary: true }],
+    experienceTags: [attested('garden_courtyard'), attested('intimate_cosy'), attested('date_night'), attested('casual_everyday')],
+    policies: {
+      alcoholFree: says(true),
+      halal: says(true, 'verified'),
+      takesReservations: says(true),
+      openPastMidnight: says(false),
+      minimumAge: says(0, 'verified'),
+    },
     experience: {
       energy: 1,
       conversationFriendliness: 5,
@@ -338,6 +459,14 @@ export const VENUES: VenueFixture[] = [
     bookingUrl: 'https://example.invalid/rock-stage/reserve',
     purpose:
       'Price band straddles a 300 ceiling: needs_confirmation, never silently "within budget" (brief C5).',
+    kinds: [{ ...attested('live_music_venue'), isPrimary: true }, attested('drinks_lounge')],
+    experienceTags: [checked('live_music'), attested('rock_indie'), attested('dancing'), attested('big_group')],
+    policies: {
+      licensed: says(true),
+      takesReservations: says(false),
+      openPastMidnight: says(true),
+      minimumAge: says(21, 'verified'),
+    },
     experience: {
       energy: 5,
       conversationFriendliness: 1,
@@ -386,6 +515,14 @@ export const VENUES: VenueFixture[] = [
     bookingUrl: null,
     purpose:
       'Event verified but no price evidence at all: needs_confirmation for a different reason than Rock Stage.',
+    kinds: [{ ...attested('live_music_venue'), isPrimary: true }, attested('restaurant')],
+    experienceTags: [checked('live_music'), checked('arabic_music'), attested('shisha'), attested('celebration')],
+    policies: {
+      alcoholFree: says(true),
+      halal: says(true, 'verified'),
+      takesReservations: says(true),
+      minimumAge: says(0, 'source_claimed'),
+    },
     experience: {
       energy: 3,
       conversationFriendliness: 4,
@@ -422,6 +559,12 @@ export const VENUES: VenueFixture[] = [
     status: 'active',
     bookingUrl: 'https://example.invalid/expired-gig/reserve',
     purpose: 'Only a past occurrence. Must never appear as upcoming (AC02).',
+    kinds: [{ ...attested('live_music_venue'), isPrimary: true }],
+    experienceTags: [attested('live_music'), attested('casual_everyday')],
+    policies: {
+      licensed: says(true),
+      minimumAge: says(18),
+    },
     experience: {
       energy: 4,
       conversationFriendliness: 2,
@@ -464,6 +607,16 @@ export const VENUES: VenueFixture[] = [
     status: 'active',
     bookingUrl: 'https://example.invalid/midnight/reserve',
     purpose: 'A 22:00-02:00 set must match a Friday evening query, not fall between days.',
+    kinds: [{ ...attested('drinks_lounge'), isPrimary: true }, attested('live_music_venue')],
+    experienceTags: [checked('live_music'), attested('electronic_dj'), attested('dancing'), attested('rooftop')],
+    policies: {
+      licensed: says(true),
+      // The fixture's whole point is the 22:00-02:00 set, so this one fact is
+      // editor-checked rather than merely asserted.
+      openPastMidnight: says(true, 'verified'),
+      takesReservations: says(true),
+      minimumAge: says(21, 'verified'),
+    },
     experience: {
       energy: 4,
       conversationFriendliness: 2,
@@ -504,6 +657,12 @@ export const VENUES: VenueFixture[] = [
     status: 'active',
     bookingUrl: 'https://example.invalid/cancelled/reserve',
     purpose: 'Cancelled occurrence must be excluded and stay excluded (doc 16 #6).',
+    kinds: [{ ...attested('concert_show'), isPrimary: true }],
+    experienceTags: [attested('live_music'), attested('comedy')],
+    policies: {
+      takesReservations: says(true),
+      minimumAge: says(16),
+    },
     experience: {
       conversationFriendliness: 3,
       noiseBand: 'moderate',
@@ -545,6 +704,11 @@ export const VENUES: VenueFixture[] = [
     bookingUrl: 'https://example.invalid/scheduled-only/reserve',
     purpose:
       'The single most important exclusion: a weekly rule with no date-specific evidence is NOT recommendable (ADR-010).',
+    kinds: [{ ...attested('live_music_venue'), isPrimary: true }],
+    experienceTags: [attested('live_music'), attested('acoustic_singer')],
+    policies: {
+      takesReservations: says(false),
+    },
     experience: {
       energy: 3,
       conversationFriendliness: 3,
@@ -593,6 +757,12 @@ export const VENUES: VenueFixture[] = [
     bookingUrl: 'https://example.invalid/conflicting/reserve',
     purpose:
       'Two credible sources disagree on the start time. Must not be recommended and must not be silently resolved (doc 16 #5).',
+    kinds: [{ ...attested('live_music_venue'), isPrimary: true }, attested('drinks_lounge')],
+    experienceTags: [attested('live_music'), attested('jazz'), attested('rooftop')],
+    policies: {
+      licensed: says(true),
+      openPastMidnight: says(true),
+    },
     experience: {
       conversationFriendliness: 3,
       noiseBand: 'moderate',
@@ -642,6 +812,11 @@ export const VENUES: VenueFixture[] = [
     status: 'permanently_closed',
     bookingUrl: null,
     purpose: 'A closed venue is excluded even with a confirmed occurrence on the books.',
+    kinds: [{ ...attested('restaurant'), isPrimary: true }],
+    experienceTags: [attested('casual_everyday')],
+    policies: {
+      halal: says(true),
+    },
     experience: {
       conversationFriendliness: 4,
       evidenceState: 'stale',
@@ -673,6 +848,14 @@ export const VENUES: VenueFixture[] = [
     bookingUrl: 'https://example.invalid/accessibility-unknown/reserve',
     purpose:
       'Wheelchair access unknown. With accessibility required this must be needs_confirmation, never a silent pass (doc 13).',
+    kinds: [{ ...attested('live_music_venue'), isPrimary: true }, attested('restaurant')],
+    experienceTags: [checked('live_music'), attested('acoustic_singer'), attested('intimate_cosy'), attested('solo_friendly')],
+    policies: {
+      alcoholFree: says(true),
+      halal: says(true),
+      takesReservations: says(true),
+      minimumAge: says(0),
+    },
     experience: {
       energy: 2,
       conversationFriendliness: 4,
@@ -742,6 +925,16 @@ export const VENUES: VenueFixture[] = [
     bookingUrl: 'https://example.invalid/nile-oud/reserve',
     purpose:
       'Arabic name, EGP prices, Africa/Cairo local times. Proves the slice works with no code change (doc 16 #3).',
+    kinds: [{ ...attested('live_music_venue'), isPrimary: true }, attested('restaurant')],
+    // nile_view is a Cairo market extension, seeded alongside the market.
+    experienceTags: [checked('live_music'), checked('arabic_music'), attested('nile_view'), attested('grand_historic'), attested('celebration')],
+    policies: {
+      halal: says(true, 'verified'),
+      alcoholFree: says(true),
+      takesReservations: says(true),
+      openPastMidnight: says(true),
+      minimumAge: says(0, 'verified'),
+    },
     experience: {
       energy: 3,
       conversationFriendliness: 4,
@@ -796,6 +989,14 @@ export const VENUES: VenueFixture[] = [
     status: 'active',
     bookingUrl: null,
     purpose: 'Cairo quiet option with no live music: the Cairo mirror of Quiet Courtyard.',
+    kinds: [{ ...attested('restaurant'), isPrimary: true }],
+    experienceTags: [attested('garden_courtyard'), attested('intimate_cosy'), attested('solo_friendly'), attested('casual_everyday')],
+    policies: {
+      alcoholFree: says(true),
+      halal: says(true, 'verified'),
+      takesReservations: says(false),
+      minimumAge: says(0, 'verified'),
+    },
     experience: {
       energy: 1,
       conversationFriendliness: 5,

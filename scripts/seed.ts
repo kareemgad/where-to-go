@@ -19,6 +19,7 @@
 import postgres from 'postgres';
 
 import { COUNTRIES, MARKETS, VENUES } from '../src/db/seed/fixtures.ts';
+import type { PolicyKey } from '../src/db/seed/fixtures.ts';
 import { parseDecimal } from '../src/lib/money.ts';
 import { fixedClock, nextWeekdayOnOrAfter, occurrenceFromLocal, systemClock } from '../src/lib/time.ts';
 
@@ -68,6 +69,8 @@ try {
     );
     process.exit(1);
   }
+
+  let extensionCount = 0;
 
   await sql.begin(async (tx) => {
     // ---- reset ------------------------------------------------------------
@@ -203,6 +206,31 @@ try {
         )
       `;
 
+      // Vocabulary this market adds to the global set (doc 10). Seeded rather
+      // than migrated because a market extension needs a market id, and the
+      // market only exists now.
+      for (const extension of market.experienceTagExtensions ?? []) {
+        const tagRow = pickOne(await tx`
+          insert into experience_tags (key, facet, market_id, sort_order)
+          values (${extension.key}, ${extension.facet}::experience_facet, ${marketRow.id}, 200)
+          returning id
+        `, 'tagRow');
+        for (const label of extension.labels) {
+          await tx`
+            insert into experience_tag_labels (tag_id, locale, label)
+            values (${tagRow.id}, ${label.locale}, ${label.label})
+          `;
+        }
+        extensionCount += 1;
+      }
+
+      for (const band of market.timeBandOverrides ?? []) {
+        await tx`
+          insert into time_of_day_bands (key, market_id, starts_local, ends_local)
+          values (${band.key}, ${marketRow.id}, ${band.startsLocal}, ${band.endsLocal})
+        `;
+      }
+
       // Through the state machine, so every transition is audited.
       for (const status of MARKET_PATH) {
         await tx`update markets set status = ${status}::market_status where id = ${marketRow.id}`;
@@ -214,6 +242,8 @@ try {
     let claimCount = 0;
     let pendingCount = 0;
     let conflictCount = 0;
+    let kindCount = 0;
+    let tagCount = 0;
 
     for (const venue of VENUES) {
       const marketId = marketIds.get(venue.marketSlug);
@@ -276,6 +306,7 @@ try {
           seating_comfort, seating_comfort_state,
           noise_band, noise_band_state,
           outdoor_seating, outdoor_seating_state,
+          indoor_seating, indoor_seating_state,
           family_friendly, family_friendly_state,
           wheelchair_accessible, wheelchair_accessible_state,
           observation_count
@@ -287,9 +318,71 @@ try {
           ${paired(e.seatingComfort)}, ${stateFor(e.seatingComfort)}::evidence_state,
           ${paired(e.noiseBand)}::noise_band, ${stateFor(e.noiseBand)}::evidence_state,
           ${paired(e.outdoorSeating)}, ${stateFor(e.outdoorSeating)}::evidence_state,
+          ${paired(e.indoorSeating)}, ${stateFor(e.indoorSeating)}::evidence_state,
           ${paired(e.familyFriendly)}, ${stateFor(e.familyFriendly)}::evidence_state,
           ${paired(e.wheelchairAccessible)}, ${stateFor(e.wheelchairAccessible)}::evidence_state,
           ${e.observationCount}
+        )
+      `;
+
+      // --- what this place is ---------------------------------------------
+      for (const kind of venue.kinds) {
+        await tx`
+          insert into venue_kinds (venue_id, kind_id, is_primary, evidence_state, source_authority)
+          select ${venueRow.id}, k.id, ${kind.isPrimary ?? false},
+                 ${kind.evidenceState}::evidence_state,
+                 ${kind.sourceAuthority}::source_authority
+          from outing_kinds k
+          where k.key = ${kind.key}
+            and (k.market_id is null or k.market_id = ${marketId})
+        `;
+        kindCount += 1;
+      }
+
+      for (const tag of venue.experienceTags) {
+        // Matched by key against the global set plus this market's extensions.
+        // A key that resolves to nothing inserts no row, which would be a
+        // silent fixture typo, so the count is asserted after the loop.
+        const inserted = await tx`
+          insert into venue_experience_tags (venue_id, tag_id, evidence_state, source_authority)
+          select ${venueRow.id}, t.id,
+                 ${tag.evidenceState}::evidence_state,
+                 ${tag.sourceAuthority}::source_authority
+          from experience_tags t
+          where t.key = ${tag.key}
+            and (t.market_id is null or t.market_id = ${marketId})
+          returning venue_id
+        `;
+        if (inserted.length === 0) {
+          throw new Error(
+            `Fixture ${venue.slug} names experience tag "${tag.key}", which is not in the ` +
+              `global vocabulary or in ${venue.marketSlug}'s extensions.`,
+          );
+        }
+        tagCount += 1;
+      }
+
+      // --- policy facts -----------------------------------------------------
+      const pol = venue.policies ?? {};
+      const policyValue = (key: PolicyKey) => pol[key]?.value ?? null;
+      const policyState = (key: PolicyKey) => pol[key]?.evidenceState ?? 'unknown';
+      await tx`
+        insert into venue_policies (
+          venue_id,
+          licensed, licensed_state,
+          alcohol_free, alcohol_free_state,
+          halal, halal_state,
+          takes_reservations, takes_reservations_state,
+          open_past_midnight, open_past_midnight_state,
+          minimum_age, minimum_age_state
+        ) values (
+          ${venueRow.id},
+          ${policyValue('licensed')}, ${policyState('licensed')}::evidence_state,
+          ${policyValue('alcoholFree')}, ${policyState('alcoholFree')}::evidence_state,
+          ${policyValue('halal')}, ${policyState('halal')}::evidence_state,
+          ${policyValue('takesReservations')}, ${policyState('takesReservations')}::evidence_state,
+          ${policyValue('openPastMidnight')}, ${policyState('openPastMidnight')}::evidence_state,
+          ${policyValue('minimumAge')}, ${policyState('minimumAge')}::evidence_state
         )
       `;
 
@@ -491,6 +584,8 @@ try {
     console.log(`  venues         ${VENUES.length}`);
     console.log(`  occurrences    ${occurrenceCount}`);
     console.log(`  claims         ${claimCount}`);
+    console.log(`  venue kinds    ${kindCount}`);
+    console.log(`  venue tags     ${tagCount} (+${extensionCount} market vocabulary extensions)`);
     console.log(`  awaiting review ${pendingCount} pending, ${conflictCount} in conflict`);
   });
 

@@ -23,7 +23,7 @@
     "db:handoffs": "node --env-file-if-exists=.env.local scripts/handoffs-report.mjs",
     "grant": "node --env-file-if-exists=.env.local scripts/grant-role.mjs",
     "demo:search": "node --import ./scripts/alias-register.mjs --env-file-if-exists=.env.local scripts/demo-search.ts",
-    "db:verify": "node --env-file-if-exists=.env.local scripts/verify-market-rules.mjs && node --env-file-if-exists=.env.local scripts/verify-occurrence-rules.mjs && node --env-file-if-exists=.env.local scripts/verify-publication-rules.mjs && node --env-file-if-exists=.env.local scripts/verify-review-rules.mjs && node --env-file-if-exists=.env.local scripts/verify-confidence-parity.ts",
+    "db:verify": "node --env-file-if-exists=.env.local scripts/verify-market-rules.mjs && node --env-file-if-exists=.env.local scripts/verify-occurrence-rules.mjs && node --env-file-if-exists=.env.local scripts/verify-publication-rules.mjs && node --env-file-if-exists=.env.local scripts/verify-review-rules.mjs && node --env-file-if-exists=.env.local scripts/verify-taxonomy-rules.mjs && node --env-file-if-exists=.env.local scripts/verify-confidence-parity.ts",
     "verify": "npm run typecheck && npm run lint && npm run guard:market && npm run test"
   },
   "dependencies": {

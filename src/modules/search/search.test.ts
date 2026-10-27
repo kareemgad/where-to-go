@@ -9,6 +9,8 @@ import type {
   Attributed,
   Candidate,
   CandidateExperience,
+  CandidatePolicies,
+  NoiseBand,
   SearchRequest,
   Verdict,
 } from './types';
@@ -38,11 +40,25 @@ function experience(overrides: Partial<CandidateExperience> = {}): CandidateExpe
     conversationFriendliness: unknown<number>(),
     lighting: unknown<number>(),
     seatingComfort: unknown<number>(),
-    noiseBand: unknown<'quiet' | 'moderate' | 'loud'>(),
+    noiseBand: unknown<NoiseBand>(),
     outdoorSeating: unknown<boolean>(),
+    indoorSeating: unknown<boolean>(),
     familyFriendly: unknown<boolean>(),
     wheelchairAccessible: unknown<boolean>(),
     observationCount: 0,
+    ...overrides,
+  };
+}
+
+/** Everything unknown by default: a fixture must opt in to every fact. */
+function policies(overrides: Partial<CandidatePolicies> = {}): CandidatePolicies {
+  return {
+    licensed: unknown<boolean>(),
+    alcoholFree: unknown<boolean>(),
+    halal: unknown<boolean>(),
+    takesReservations: unknown<boolean>(),
+    openPastMidnight: unknown<boolean>(),
+    minimumAge: unknown<number>(),
     ...overrides,
   };
 }
@@ -99,6 +115,9 @@ function candidate(overrides: Partial<Candidate> & Pick<Candidate, 'venueSlug'>)
     neighborhoodId: null,
     distanceMeters: null,
     experience: experience(),
+    policies: policies(),
+    kinds: [],
+    tags: [],
     price: null,
     occurrence: null,
     ...overrides,

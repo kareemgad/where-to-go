@@ -20,7 +20,14 @@ import { currency, priceBand } from '@/lib/money';
 import { localDate, localTime, searchWindow, searchWindowBounds } from '@/lib/time';
 import type { Clock } from '@/lib/time';
 import type { EvidenceState, SourceAuthority } from '@/modules/evidence/confidence';
-import type { Attributed, Candidate, SearchRequest } from './types';
+import type {
+  Attributed,
+  Candidate,
+  CandidateKind,
+  CandidateTag,
+  NoiseBand,
+  SearchRequest,
+} from './types';
 
 // Market configuration lives in its own module: it is read by the UI and the
 // handoff route as well as by search (ADR-009).
@@ -31,6 +38,13 @@ const attributed = <T>(value: T | null, state: string): Attributed<T> => ({
   value,
   evidenceState: state as EvidenceState,
 });
+
+/** A nullable boolean column and its paired state, read together. */
+const boolAttr = (row: Record<string, unknown>, column: string): Attributed<boolean> =>
+  attributed(
+    row[column] === null || row[column] === undefined ? null : Boolean(row[column]),
+    String(row[`${column}_state`] ?? 'unknown'),
+  );
 
 export async function findCandidates(
   sql: Sql,
@@ -66,9 +80,23 @@ export async function findCandidates(
       ve.seating_comfort, ve.seating_comfort_state,
       ve.noise_band, ve.noise_band_state,
       ve.outdoor_seating, ve.outdoor_seating_state,
+      ve.indoor_seating, ve.indoor_seating_state,
       ve.family_friendly, ve.family_friendly_state,
       ve.wheelchair_accessible, ve.wheelchair_accessible_state,
       coalesce(ve.observation_count, 0)               as observation_count,
+
+      vp.licensed, vp.licensed_state,
+      vp.alcohol_free, vp.alcohol_free_state,
+      vp.halal, vp.halal_state,
+      vp.takes_reservations, vp.takes_reservations_state,
+      vp.open_past_midnight, vp.open_past_midnight_state,
+      vp.minimum_age, vp.minimum_age_state,
+
+      -- Aggregated rather than joined into the row set: a venue with six tags
+      -- and two kinds would otherwise multiply into twelve rows, and the price
+      -- and occurrence laterals would be evaluated for each of them.
+      coalesce(tags.list, '[]'::jsonb)                as experience_tags,
+      coalesce(kinds.list, '[]'::jsonb)               as outing_kinds,
 
       pp.amount_minor_low, pp.amount_minor_high, pp.currency as price_currency,
       pp.price_basis, pp.includes_tax, pp.includes_service_charge,
@@ -90,6 +118,27 @@ export async function findCandidates(
       on m.id = v.canonical_market_id and m.status = 'live'
     left join venue_locations vl on vl.venue_id = v.id
     left join venue_experience ve on ve.venue_id = v.id
+    left join venue_policies vp on vp.venue_id = v.id
+    left join lateral (
+      select jsonb_agg(jsonb_build_object(
+        'key', et.key, 'facet', et.facet, 'evidenceState', vet.evidence_state
+      ) order by et.facet, et.sort_order) as list
+      from venue_experience_tags vet
+      join experience_tags et on et.id = vet.tag_id
+      where vet.venue_id = v.id
+        -- A market extension is only offered where it belongs. Without this a
+        -- Cairo-only tag would match against a Dubai venue that cannot have it.
+        and (et.market_id is null or et.market_id = ${request.marketId})
+    ) tags on true
+    left join lateral (
+      select jsonb_agg(jsonb_build_object(
+        'key', ok.key, 'isPrimary', vk.is_primary, 'evidenceState', vk.evidence_state
+      ) order by vk.is_primary desc, ok.sort_order) as list
+      from venue_kinds vk
+      join outing_kinds ok on ok.id = vk.kind_id
+      where vk.venue_id = v.id
+        and (ok.market_id is null or ok.market_id = ${request.marketId})
+    ) kinds on true
     left join neighborhoods nh on nh.id = ${neighborhoodId}::uuid
     left join place_names pn
       on pn.place_kind = 'venue'
@@ -183,12 +232,16 @@ export async function findCandidates(
           String(row['seating_comfort_state'] ?? 'unknown'),
         ),
         noiseBand: attributed(
-          (row['noise_band'] as 'quiet' | 'moderate' | 'loud' | null) ?? null,
+          (row['noise_band'] as NoiseBand | null) ?? null,
           String(row['noise_band_state'] ?? 'unknown'),
         ),
         outdoorSeating: attributed(
           row['outdoor_seating'] === null ? null : Boolean(row['outdoor_seating']),
           String(row['outdoor_seating_state'] ?? 'unknown'),
+        ),
+        indoorSeating: attributed(
+          row['indoor_seating'] === null ? null : Boolean(row['indoor_seating']),
+          String(row['indoor_seating_state'] ?? 'unknown'),
         ),
         familyFriendly: attributed(
           row['family_friendly'] === null ? null : Boolean(row['family_friendly']),
@@ -200,6 +253,21 @@ export async function findCandidates(
         ),
         observationCount: Number(row['observation_count'] ?? 0),
       },
+      policies: {
+        licensed: boolAttr(row, 'licensed'),
+        alcoholFree: boolAttr(row, 'alcohol_free'),
+        halal: boolAttr(row, 'halal'),
+        takesReservations: boolAttr(row, 'takes_reservations'),
+        openPastMidnight: boolAttr(row, 'open_past_midnight'),
+        minimumAge: attributed(
+          row['minimum_age'] === null || row['minimum_age'] === undefined
+            ? null
+            : Number(row['minimum_age']),
+          String(row['minimum_age_state'] ?? 'unknown'),
+        ),
+      },
+      kinds: (row['outing_kinds'] as CandidateKind[] | null) ?? [],
+      tags: (row['experience_tags'] as CandidateTag[] | null) ?? [],
       price: hasPrice
         ? {
             band: priceBand({

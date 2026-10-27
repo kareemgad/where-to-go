@@ -14,8 +14,8 @@ Where to Go is a **global, multi-market experience intelligence platform**. Duba
 - Preserve user privacy; no demographic inference from images; sponsorship always labeled.
 - Keep `09_DECISION_LOG.md` and ADRs updated. Report tests, files changed, limitations and next approval gate.
 
-## Proposed defaults (not yet approved)
-Next.js App Router, React, Tailwind, PostgreSQL/PostGIS, Zod, background job workers, provider-agnostic LLM integration, managed deployment.
+## Approved stack (ADRs 001-012, `decisions/`)
+Next.js App Router, React, Tailwind, Supabase (PostgreSQL 17 + PostGIS + Auth + RLS), Zod, provider-agnostic ports for maps, geocoding and LLM. Maps, geocoding and the LLM are stubbed behind their ports until a spend cap is agreed (ADR-003, ADR-004); no provider, SDK or key is installed. Deployment and data residency remain open (ADR-007).
 
 ## Developer commands
 Node 24 (installed user-scope; MSI installs are blocked by org policy). Secrets live in `.env.local`, which is gitignored; `.env.example` is the contract.
@@ -29,6 +29,7 @@ npm run lint             # eslint (flat config)
 npm run test             # vitest, offline and pure
 npm run guard:market     # T15 - fails on a market/currency/timezone/locale literal in shared logic
 npm run verify           # typecheck + lint + guard + test, the pre-commit gate
+npm run grant            # grant a role to an existing user; creates no accounts
 ```
 
 Database (`where-to-go-dev`, ref `lujwjhrqiksrpdgsblad`). The Supabase CLI is not used: it needs an interactive login, so the repository has its own runner that writes to the same `supabase_migrations.schema_migrations` table and stays interchangeable with `supabase db push`.
@@ -45,4 +46,4 @@ npm run demo:search      # the vertical slice end to end, both markets, from the
 
 `FIXTURE_CLOCK=2026-10-26T12:00:00Z` pins the seeded clock so fixture dates and demo output are reproducible; omit it to use the real current time.
 
-Migration files are `supabase/migrations/<14-digit version>_<snake_case>.sql`. The version is the identity, the repository is the source of truth, and an applied migration is history - fix a mistake with a new migration, never by editing an applied one. Seed commands do not exist yet.
+Migration files are `supabase/migrations/<14-digit version>_<snake_case>.sql`. The version is the identity, the repository is the source of truth, and an applied migration is history - fix a mistake with a new migration, never by editing an applied one. Reference data that the engine needs - the experience and outing vocabularies, the time-of-day bands, the editorial source provider - lives in migrations rather than the seed, because an environment without it has a broken search rather than an empty demo. `npm run db:seed` rebuilds only the fictional world and refuses to run if real data is present.
