@@ -1,0 +1,9 @@
+# ADR-014 | Controlled vocabularies for experiences, outing kinds and aliases
+
+- **Question:** How are experiences, outing types and the words users type for them represented?
+- **Alternatives:** (a) Three tables - a 22-term experience vocabulary across four facets, 12 outing kinds, and an alias table mapping free text onto both - each global with per-market extensions, with venue tags and kinds carrying their own evidence. (b) Keep free-text genre tags and match on strings. (c) A vocabulary in code rather than data.
+- **Decision:** (a). The v1 term list was approved by the product owner on 2026-10-27.
+- **Rationale:** (b) compares a string a user typed against a string a venue wrote, which matches on spelling rather than on meaning and leaves a parser nothing to map onto. (c) means a market adding a term waits for a deploy, against `10`'s rule that a new market is configuration rather than a core-code fork. The alias table deliberately serves two callers - the parser resolving typed text and the repository resolving an occurrence's `genre_tags` - so both reach the same key for the same word; two separate mappings would drift. `genre_tags` are kept verbatim because that is what evidence means, and are display and audit only. A venue may hold several outing kinds with at most one primary, because a restaurant that hosts bands is both and a single kind would misclassify exactly the hybrid venues this product exists for.
+- **Consequences:** Match strength is overlap weighted by evidence state, with an occurrence-level tag counting ahead of a venue-level one. It is never shown as a percentage and never called confidence.
+- **Owner:** Kareem Gad · **Date:** 2026-10-27 · **Status:** Approved
+- **Revisit trigger:** Reviewers routinely wanting a term the vocabulary lacks, or an alias proving ambiguous in practice.

@@ -134,6 +134,13 @@ interface Dictionary {
   readonly facets: Readonly<Record<string, string>>;
   readonly ageBandNote: string;
   readonly budgetHint: string;
+  readonly describeYourNight: string;
+  readonly describePlaceholder: string;
+  readonly youSaid: string;
+  readonly understood: string;
+  readonly remove: string;
+  readonly didNotUnderstand: string;
+  readonly whoIsComingQuestion: string;
 }
 
 const EN: Dictionary = {
@@ -272,6 +279,13 @@ const EN: Dictionary = {
   ageBandNote:
     'Used only to check a venue’s minimum admission age for this search. Never stored, and never about your own age.',
   budgetHint: 'Leave empty to see prices without filtering on them.',
+  describeYourNight: 'Describe your night',
+  describePlaceholder: 'jazz on Saturday, somewhere quiet, under 300',
+  youSaid: 'You said',
+  understood: 'What we understood',
+  remove: 'Remove',
+  didNotUnderstand: 'We could not place',
+  whoIsComingQuestion: 'Who is coming? Some venues have a minimum age.',
 };
 
 const AR: Dictionary = {
@@ -410,6 +424,13 @@ const AR: Dictionary = {
   ageBandNote:
     'يُستخدم فقط للتحقق من الحد الأدنى لعمر الدخول في هذا البحث. لا يُحفظ أبدًا، ولا يتعلق بعمرك أنت.',
   budgetHint: 'اتركه فارغًا لعرض الأسعار دون التصفية بها.',
+  describeYourNight: 'صِف ليلتك',
+  describePlaceholder: 'جاز يوم السبت، مكان هادئ، أقل من ٣٠٠',
+  youSaid: 'قلت',
+  understood: 'ما فهمناه',
+  remove: 'إزالة',
+  didNotUnderstand: 'لم نتمكن من فهم',
+  whoIsComingQuestion: 'من سيأتي؟ بعض الأماكن لها حد أدنى للعمر.',
 };
 
 /**

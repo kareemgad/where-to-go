@@ -66,3 +66,31 @@ The admin review surface and Supabase Auth are in. A reviewer signs in, sees onl
 **Not verified in a browser:** every signed-in page — queue, claim detail, published values, audit trail. Exercising them requires authenticating as a real account, and credential handling stays outside this work.
 
 **Still outstanding:** spend cap has no figure (maps, geocoding, LLM stubbed) · UAE and Egypt data residency unassessed (ADR-007) · no rate limiting on the booking handoff route · `src/modules/search/repository.ts` has no isolated unit tests · OneDrive sync exclusion for `.next` and `node_modules` not yet applied.
+
+## 2026-10-27 | Chat-plus-refine discovery, and a widened typed query
+
+The intent form is replaced by one screen: a chat input, chips showing what was understood, a collapsible refine panel, then results. Chat and refine edit the same typed query, and that query is the URL. Specified in `18_INTENT_AND_REFINEMENT_SPEC.md`; recorded as ADR-013 (the when-window), ADR-014 (controlled vocabularies) and ADR-015 (the parser port).
+
+Delivered in four slices, each verified and committed: schema and fixtures; the when-window and per-day eligibility; the engine reading the new vocabulary; the parser and the screen.
+
+**Decision — the query is the URL, and the no-JavaScript path is the only path.** The chat input is a form posting to a server action that parses, patches and redirects. No session, no client state. "Cheaper" and "Saturday then" work with scripting off, survive a reload, and are shareable as links. This was cheaper to build than a client-side version, not a concession.
+
+**Decision — a turn is a patch, not a query.** Additive by default, replacing only on an explicit marker, because "and some jazz" and "jazz instead" are different sentences.
+
+**Decision — the mock parser is the only adapter.** No provider, SDK or key, per ADR-004 and the standing spend-cap constraint. It never invents a term outside the vocabulary, is reproducible, and reports what it could not place. Output is validated rather than trusted: a tag outside the vocabulary is dropped, a malformed value fails the turn closed.
+
+**Decision — approving a match strength is not confidence.** Match strength is overlap between requested and stored tags, weighted by evidence. It is shown as the named tags that matched, never as a percentage and never labelled confidence.
+
+**Decision — "quiet enough to talk" is no longer a hard constraint.** It excluded venues on a stored conversation score, so one uncalibrated number could remove a place entirely. Noise is four soft bands instead. Its two tests were deleted rather than coerced into passing.
+
+**Four market assumptions found and moved into configuration.** None would have been caught by the T15 guard, which looks for currencies, zones and locale tags:
+- Weekend days — Saturday-Sunday in the UAE, Friday-Saturday in Egypt.
+- Time-of-day band hours — evening is not the same hours everywhere.
+- The budget step behind "cheaper" — caught by the guard as a currency ternary in shared logic: right behaviour, wrong place.
+- Every Dubai fixture ran on a Friday, which was correct while the canonical query was "Friday night" and wrong once the weekend became configuration: "this weekend" in Dubai matched nothing at all.
+
+**Defects found by the suites rather than by use:** approval claiming to verify facts nobody had checked, and breaking outright on machine-extracted claims; a conflict that could be seen but never resolved; fixture factories storing jsonb as strings so assertions on nested fields compared against `undefined` and passed; the alias hook resolving only `@/` specifiers, which broke the moment a module imported a *value* rather than a type from a sibling.
+
+**Gates:** `npm run verify` 189 unit tests; `npm run db:verify` 240 database rules across six suites. Verified in the browser in both markets, including an Arabic utterance resolving to the same typed query an English one would.
+
+**Still outstanding:** spend cap has no figure, so maps, geocoding and the LLM remain stubbed · UAE and Egypt data residency unassessed (ADR-007) · no rate limiting on the booking handoff route · `src/modules/search/repository.ts` has no isolated unit tests · age bands live in the URL, and query strings reach server access logs · venue-question answering is scoped to stored claims and says "we don't know that yet" for everything else.

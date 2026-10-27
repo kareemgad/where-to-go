@@ -42,6 +42,12 @@ export interface MarketFixture {
    * everywhere, and the resolver reads it rather than assuming.
    */
   weekendDays: number[];
+  /**
+   * Whole units of the market currency. A readable step for a "cheaper"
+   * control here, not a constant: 50 is a sensible move in one currency and
+   * meaningless in another whose prices run an order of magnitude higher.
+   */
+  budgetStep: number;
   locales: { locale: string; isDefault: boolean }[];
   /** Rough operating envelope: [minLon, minLat, maxLon, maxLat]. Fictional. */
   envelope: [number, number, number, number];
@@ -86,6 +92,7 @@ export const MARKETS: MarketFixture[] = [
     defaultLocale: 'en-AE',
     // The UAE moved to a Saturday-Sunday weekend in 2022.
     weekendDays: [6, 7],
+    budgetStep: 50,
     locales: [
       { locale: 'en-AE', isDefault: true },
       { locale: 'ar-AE', isDefault: false },
@@ -151,6 +158,7 @@ export const MARKETS: MarketFixture[] = [
     // Egypt's weekend is Friday and Saturday, which is the whole reason this
     // is market configuration and not a constant.
     weekendDays: [5, 6],
+    budgetStep: 250,
     locales: [
       { locale: 'ar-EG', isDefault: true },
       { locale: 'en-EG', isDefault: false },

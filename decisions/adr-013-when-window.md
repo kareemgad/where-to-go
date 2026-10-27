@@ -1,0 +1,9 @@
+# ADR-013 | The when-window, its cap, and what varies by market
+
+- **Question:** How does a user say *when*, how wide may that be, and which parts of the answer are configuration rather than code?
+- **Alternatives:** (a) A `when` object - exact date, range, or relative phrase - plus a time-of-day band, capped at 14 days, evaluated per day, with weekend days and band hours stored per market. (b) Keep a required date with from/to times. (c) Accept relative phrases but resolve them against the server clock and a fixed Saturday-Sunday weekend.
+- **Decision:** (a).
+- **Rationale:** `13` puts *when* among the seven things intent is made of and asks that neither the conversational nor the structured path demand a questionnaire; a required date plus two times is a questionnaire. The cap is 14 days because a window wide enough to hold "some night next month" stops being a decision and becomes a directory, which is what `02`'s UX principles put second - and the cap is reported rather than silently applied. (c) is rejected twice over: resolving "tonight" against the server clock hands one market yesterday's shortlist near midnight, and a fixed weekend is wrong in Cairo every week. Weekend days and band hours are therefore market columns. Neither would be caught by the T15 guard, which looks for currencies, zones and locale tags, not weekday numbers or clock hours - so this ADR is the record that they were considered.
+- **Consequences:** `Candidate` carries every occurrence in the window rather than one; eligibility runs per day and ranking picks the best day, scoring before choosing; occurrences load in their own query, because joining would multiply each venue row by its occurrence count.
+- **Owner:** Kareem Gad · **Date:** 2026-10-27 · **Status:** Approved
+- **Revisit trigger:** A market needing more than 14 days, or occurrence volume making the per-day evaluation too slow to run in the request.

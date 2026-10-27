@@ -20,7 +20,10 @@ import { assembleResponse } from '@/modules/search/ranking';
 import { findCandidates } from '@/modules/search/repository';
 import { MUST_HAVES } from '@/modules/search/types';
 import type { SearchRequest, SearchResult } from '@/modules/search/types';
+import { ChatPanel } from '@/app/_components/chat';
 import { RefinePanel } from '@/app/_components/refine';
+import { toHref } from '@/modules/intent/query';
+import type { SearchQuery } from '@/modules/intent/query';
 import {
   CompletenessMeter,
   ConfidenceChip,
@@ -58,6 +61,11 @@ const QuerySchema = z.object({
   kinds: z.string().max(400).optional(),
   who: z.string().max(100).optional(),
   noise: z.enum(['quiet', 'moderate', 'lively', 'loud']).optional(),
+  // Carried from a chat turn so the page can show what was understood without
+  // holding a session. Display only: none of these reach the matcher.
+  said: z.string().max(300).optional(),
+  ask: z.string().max(100).optional(),
+  missed: z.string().max(300).optional(),
 });
 
 /** Comma-separated keys from a URL, folded and filtered against a whitelist. */
@@ -317,6 +325,73 @@ export default async function Discover({
   const anyDemo = candidates.some((c) => c.isDemoData);
   const bands = await loadTimeBands(sql, market.id);
   const tagLabels = Object.fromEntries(vocabulary.map((t) => [t.key, t.label]));
+  const kindLabels = Object.fromEntries(kinds.map((k) => [k.key, k.label]));
+
+  // The query as the chat panel edits it, rebuilt from what actually survived
+  // validation rather than from the raw parameters: a chip for a term the
+  // engine discarded would be a filter the user could not satisfy.
+  const currentQuery: SearchQuery = {
+    when: q.when,
+    band: q.band,
+    party: q.party,
+    budget: q.budget,
+    tags: request.softPreferences.experienceTags,
+    mustHaves: request.mustHaves,
+    outingKinds: request.outingKinds,
+    ageBands: request.ageBands,
+    noise: request.softPreferences.noiseLevel,
+  };
+
+  // Every term in force, with a way to remove each one (doc 02 P1).
+  const chips = [
+    ...currentQuery.tags.map((key) => ({
+      dimension: 'tag',
+      value: key,
+      label: tagLabels[key] ?? key,
+    })),
+    ...currentQuery.mustHaves.map((key) => ({
+      dimension: 'must_have',
+      value: key,
+      label: copy.constraints[key] ?? key,
+    })),
+    ...currentQuery.outingKinds.map((key) => ({
+      dimension: 'outing_kind',
+      value: key,
+      label: kindLabels[key] ?? key,
+    })),
+    ...currentQuery.ageBands.map((band) => ({
+      dimension: 'age_band',
+      value: band,
+      label: copy.ageBands[band] ?? band,
+    })),
+    ...(currentQuery.noise !== undefined
+      ? [
+          {
+            dimension: 'noise',
+            value: currentQuery.noise,
+            label: `${copy.noiseLevel}: ${copy.noiseBands[currentQuery.noise] ?? currentQuery.noise}`,
+          },
+        ]
+      : []),
+    ...(currentQuery.budget !== undefined
+      ? [
+          {
+            dimension: 'budget',
+            value: String(currentQuery.budget),
+            label: `${copy.budgetCeiling}: ${currentQuery.budget} ${market.currency}`,
+          },
+        ]
+      : []),
+    ...(currentQuery.party !== undefined
+      ? [
+          {
+            dimension: 'party',
+            value: String(currentQuery.party),
+            label: `${copy.partySize}: ${currentQuery.party}`,
+          },
+        ]
+      : []),
+  ];
 
   return (
     <main className="mx-auto max-w-3xl px-6 py-12">
@@ -345,6 +420,28 @@ export default async function Discover({
           <DemoBanner locale={market.defaultLocale} />
         </div>
       ) : null}
+
+      <div className="mt-6">
+        <ChatPanel
+          marketSlug={market.slug}
+          locale={market.defaultLocale}
+          query={currentQuery}
+          chips={chips}
+          said={q.said}
+          missed={q.missed}
+          question={
+            q.ask !== undefined
+              ? {
+                  prompt: copy.whoIsComingQuestion,
+                  answers: (['kids', 'teens', 'adults_only'] as const).map((band) => ({
+                    label: copy.ageBands[band] ?? band,
+                    href: toHref(market.slug, { ...currentQuery, ageBands: [band] }),
+                  })),
+                }
+              : undefined
+          }
+        />
+      </div>
 
       <RefinePanel
         marketSlug={market.slug}

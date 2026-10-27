@@ -1,0 +1,9 @@
+# ADR-015 | The intent parser port and its mock-only adapter
+
+- **Question:** What parses an utterance, and what is it allowed to decide?
+- **Alternatives:** (a) An `IntentParser` port with a deterministic mock adapter as the only implementation: rules over folded text, offline, English and Arabic, output validated by Zod and failing closed. (b) Ship an LLM adapter now. (c) No parser; structured filters only.
+- **Decision:** (a). (b) requires a separate approval and a spend cap (ADR-003, ADR-004).
+- **Rationale:** ADR-004 already limits a model to parsing and phrasing, never eligibility, ranking or publication. The mock is not a placeholder: the product has to be fully usable with the model switched off, so adding a provider later is a cost decision rather than a rescue. Three properties the mock has that a model would need constraining into - it never invents a term outside the vocabulary, it is reproducible so a search is shareable as a URL, and it reports what it could not place rather than quietly dropping it. Output is validated rather than trusted: a tag outside the vocabulary is dropped, and a malformed value fails the whole turn closed, leaving the query untouched (doc 07). A turn produces a *patch*, not a whole query, so "cheaper" and "Saturday then" mean what they say.
+- **Consequences:** Chat and the refine panel edit one typed query, and that query is the URL - no session anywhere. The chat input posts to a server action that parses and redirects, so the structured path and the conversational path are the same path, and both work with scripting off. At most one clarifying question, asked only when a hard filter hangs on the answer.
+- **Owner:** Kareem Gad · **Date:** 2026-10-27 · **Status:** Approved
+- **Revisit trigger:** A spend cap agreed and a provider chosen, or the mock proving too blunt on real phrasing.

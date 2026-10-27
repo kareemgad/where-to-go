@@ -10,6 +10,8 @@ import {
   loadTimeBands,
 } from '@/modules/taxonomy/queries';
 import { RefinePanel } from '@/app/_components/refine';
+import { ChatPanel } from '@/app/_components/chat';
+import { EMPTY_QUERY } from '@/modules/intent/query';
 import { DemoBanner } from '@/app/_components/evidence';
 
 /**
@@ -58,6 +60,18 @@ export default async function MarketHome({
 
       <div className="mt-6">
         <DemoBanner locale={market.defaultLocale} />
+      </div>
+
+      {/* Chat first, refine below: doc 13 asks for conversational input and
+          accessible structured filters, with neither demanding a long
+          questionnaire. Both edit the same query. */}
+      <div className="mt-8">
+        <ChatPanel
+          marketSlug={market.slug}
+          locale={market.defaultLocale}
+          query={EMPTY_QUERY}
+          chips={[]}
+        />
       </div>
 
       {/* The same panel the results page shows, so the two cannot drift into

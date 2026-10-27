@@ -21,6 +21,8 @@ export interface MarketRecord {
    * Sunday in one market, Friday and Saturday in another.
    */
   readonly weekendDays: readonly number[];
+  /** Whole units; how far a relative budget change moves the ceiling. */
+  readonly budgetStep: number;
 }
 
 const SELECT = `
@@ -30,7 +32,8 @@ const SELECT = `
   timezone,
   currency,
   default_locale  as "defaultLocale",
-  weekend_days    as "weekendDays"
+  weekend_days    as "weekendDays",
+  budget_step     as "budgetStep"
 `;
 
 export async function loadMarketBySlug(sql: Sql, slug: string): Promise<MarketRecord | null> {
