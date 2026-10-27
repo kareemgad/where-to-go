@@ -22,10 +22,13 @@
 
 import { positionInRange, money } from '@/lib/money';
 import { evidenceWeight } from '@/modules/evidence/confidence';
+import { unconfirmedCounts } from './eligibility';
+import { MUST_HAVES } from './types';
 import type { EvidenceState } from '@/modules/evidence/confidence';
 import type {
   Candidate,
   CandidateOccurrence,
+  NoiseBand,
   ConstraintKey,
   DayEvaluation,
   Relaxation,
@@ -40,7 +43,7 @@ import type {
 export const RANKING_VERSION = 'v0.1.0';
 
 const WEIGHTS = {
-  music: 0.3,
+  experiences: 0.3,
   atmosphere: 0.25,
   budget: 0.2,
   distance: 0.1,
@@ -62,33 +65,113 @@ function closeness(actual: number, preferred: number): number {
   return clamp01(1 - Math.abs(actual - preferred) / 4);
 }
 
-function scoreMusic(
+/**
+ * Match strength: how much of what was asked for this place is known to offer.
+ *
+ * Overlap between the requested vocabulary keys and the stored ones, each hit
+ * weighted by the evidence behind it, so a venue whose jazz claim is verified
+ * outranks one whose jazz claim is a machine extraction nobody checked.
+ *
+ * A tag asserted about tonight's programme counts ahead of the same tag
+ * asserted about the venue in general: "they do jazz sometimes" is a weaker
+ * answer to "jazz tonight" than "tonight is the jazz night".
+ *
+ * Never shown as confidence, and never a model's opinion — arithmetic over
+ * stored claims. A venue scores low here either because it does not match or
+ * because nobody has told us it does, which is why information completeness is
+ * reported separately rather than folded in.
+ */
+export function matchStrength(
+  candidate: Candidate,
+  occurrence: CandidateOccurrence | null,
+  wanted: readonly string[],
+): { strength: number; matched: string[] } {
+  if (wanted.length === 0) return { strength: 0, matched: [] };
+
+  const venueTags = new Map(candidate.tags.map((t) => [t.key, t.evidenceState]));
+  const nightTags = new Set(occurrence?.experienceTags ?? []);
+
+  const matched: string[] = [];
+  let total = 0;
+
+  for (const key of wanted) {
+    if (nightTags.has(key)) {
+      // The programme itself says so, which is the strongest form of this
+      // claim: it is about the night being offered, not about the venue.
+      matched.push(key);
+      total += occurrence ? evidenceWeight(occurrence.evidenceState) : 0;
+      continue;
+    }
+    const state = venueTags.get(key);
+    if (state !== undefined) {
+      matched.push(key);
+      total += evidenceWeight(state);
+    }
+  }
+
+  return { strength: clamp01(total / wanted.length), matched };
+}
+
+function scoreExperiences(
+  candidate: Candidate,
   occurrence: CandidateOccurrence | null,
   request: SearchRequest,
 ): Scored | null {
-  const wanted = request.softPreferences.genres;
+  const wanted = request.softPreferences.experienceTags;
   if (wanted.length === 0) return null; // no preference stated
 
-  if (occurrence === null) return { key: 'music', normalised: 0 };
-
-  const tags = new Set(occurrence.genreTags.map((t) => t.toLowerCase()));
-  const hits = wanted.filter((g) => tags.has(g.toLowerCase())).length;
-  return { key: 'music', normalised: clamp01(hits / wanted.length) };
+  const { strength } = matchStrength(candidate, occurrence, wanted);
+  return { key: 'experiences', normalised: strength };
 }
 
+/** The four bands as an ordinal scale, so "how far off" is answerable. */
+const NOISE_ORDER: Readonly<Record<NoiseBand, number>> = {
+  quiet: 1,
+  moderate: 2,
+  lively: 3,
+  loud: 4,
+};
+
+/**
+ * How well a stored conversation score matches a wanted noise level.
+ *
+ * Quiet rooms are easy to talk in and loud ones are not, so the two signals
+ * are read together rather than separately: a venue with no noise band but a
+ * conversation score still answers the question, and vice versa.
+ */
+const CONVERSATION_FOR_NOISE: Readonly<Record<NoiseBand, number>> = {
+  quiet: 5,
+  moderate: 4,
+  lively: 2,
+  loud: 1,
+};
+
 function scoreAtmosphere(candidate: Candidate, request: SearchRequest): Scored | null {
-  const { conversationFriendliness, energy } = request.softPreferences;
-  if (conversationFriendliness === undefined && energy === undefined) return null;
+  const { noiseLevel, energy } = request.softPreferences;
+  if (noiseLevel === undefined && energy === undefined) return null;
 
   const parts: number[] = [];
-  if (conversationFriendliness !== undefined) {
-    const actual = candidate.experience.conversationFriendliness;
-    if (actual.value !== null) parts.push(closeness(actual.value, conversationFriendliness));
+
+  if (noiseLevel !== undefined) {
+    const band = candidate.experience.noiseBand;
+    if (band.value !== null) {
+      // Distance on the four-point scale, so lively against loud scores better
+      // than quiet against loud.
+      parts.push(
+        clamp01(1 - Math.abs(NOISE_ORDER[band.value] - NOISE_ORDER[noiseLevel]) / 3),
+      );
+    }
+    const conversation = candidate.experience.conversationFriendliness;
+    if (conversation.value !== null) {
+      parts.push(closeness(conversation.value, CONVERSATION_FOR_NOISE[noiseLevel]));
+    }
   }
+
   if (energy !== undefined) {
     const actual = candidate.experience.energy;
     if (actual.value !== null) parts.push(closeness(actual.value, energy));
   }
+
   if (parts.length === 0) return { key: 'atmosphere', normalised: null }; // asked, no evidence
   return { key: 'atmosphere', normalised: parts.reduce((a, b) => a + b, 0) / parts.length };
 }
@@ -170,7 +253,7 @@ export function scoreCandidate(
   request: SearchRequest,
 ): { score: number; components: ScoreComponent[]; informationCompleteness: number } {
   const scored: Scored[] = [
-    scoreMusic(occurrence, request),
+    scoreExperiences(candidate, occurrence, request),
     scoreAtmosphere(candidate, request),
     scoreBudget(candidate, request),
     scoreDistance(candidate, request),
@@ -250,7 +333,7 @@ export function buildRelaxations(
         blockedCount,
         suggestion: { kind: 'raise_budget', toMinor: highestAffordableMinor },
       });
-    } else if (constraint === 'live_music') {
+    } else if (constraint === 'live_performance') {
       relaxations.push({
         constraint,
         blockedCount,
@@ -299,6 +382,11 @@ function bestDay(
   const scoredTier = tier.map((day) => ({
     day,
     ...scoreCandidate(entry.candidate, day.occurrence, request),
+    ...matchStrength(
+      entry.candidate,
+      day.occurrence,
+      request.softPreferences.experienceTags,
+    ),
   }));
 
   scoredTier.sort((a, b) => b.score - a.score || a.day.date.localeCompare(b.day.date));
@@ -318,6 +406,8 @@ function bestDay(
     score: chosen.score,
     components: chosen.components,
     informationCompleteness: chosen.informationCompleteness,
+    matchStrength: chosen.strength,
+    matchedTags: chosen.matched,
     rankingVersion: RANKING_VERSION,
   };
 }
@@ -337,6 +427,14 @@ export function assembleResponse(
   request: SearchRequest,
   shortlistSize = 5,
 ): SearchResponse {
+  // Counted over every candidate considered, not only the ones that survived:
+  // the question the UI asks is "what would this filter cost me", and a
+  // candidate already excluded by a different filter is still part of that.
+  const unconfirmedByMustHave = unconfirmedCounts(
+    evaluated.map((e) => e.candidate),
+    MUST_HAVES,
+  );
+
   const scoredResults = evaluated
     .map((entry) => bestDay(entry, request))
     .filter((r): r is SearchResult => r !== null);
@@ -359,5 +457,6 @@ export function assembleResponse(
     relaxations: eligible.length === 0 ? buildRelaxations(scoredResults, request) : [],
     rankingVersion: RANKING_VERSION,
     truncatedFromDays: request.when.truncatedFrom,
+    unconfirmedByMustHave,
   };
 }

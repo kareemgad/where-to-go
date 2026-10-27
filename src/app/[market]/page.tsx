@@ -2,10 +2,14 @@ import Link from 'next/link';
 import { notFound } from 'next/navigation';
 
 import { db } from '@/db/client';
-import { systemClock, nextWeekdayOnOrAfter } from '@/lib/time';
 import { copyFor } from '@/modules/i18n/copy';
 import { loadMarketBySlug, marketDisplayName } from '@/modules/markets/queries';
-import { loadTimeBands } from '@/modules/taxonomy/queries';
+import {
+  loadExperienceTags,
+  loadOutingKinds,
+  loadTimeBands,
+} from '@/modules/taxonomy/queries';
+import { RefinePanel } from '@/app/_components/refine';
 import { DemoBanner } from '@/app/_components/evidence';
 
 /**
@@ -29,14 +33,13 @@ export default async function MarketHome({
 
   const name = await marketDisplayName(sql, market);
   const copy = copyFor(market.defaultLocale);
-  const bands = await loadTimeBands(sql, market.id);
+  const [bands, vocabulary, kinds] = await Promise.all([
+    loadTimeBands(sql, market.id),
+    loadExperienceTags(sql, market.id, market.defaultLocale),
+    loadOutingKinds(sql, market.id, market.defaultLocale),
+  ]);
 
-  // Default to the next Friday in the market's own zone, which is where the
-  // product's core example starts. Resolved from the clock, not hardcoded.
-  const defaultDate = nextWeekdayOnOrAfter(5, systemClock, market.timezone);
 
-  const field = 'mt-1 w-full rounded-md border border-neutral-300 px-3 py-2 text-sm focus:border-neutral-900 focus:outline-none focus-visible:ring-2 focus-visible:ring-neutral-900';
-  const labelClass = 'block text-xs font-semibold uppercase tracking-wide text-neutral-600';
 
   return (
     <main className="mx-auto max-w-2xl px-6 py-12">
@@ -57,110 +60,31 @@ export default async function MarketHome({
         <DemoBanner locale={market.defaultLocale} />
       </div>
 
-      <form action={`/${market.slug}/discover`} method="get" className="mt-8 space-y-6">
-        <fieldset>
-          <legend className="text-sm font-semibold text-neutral-900">{copy.findNight}</legend>
-
-          {/* One window rather than a date and two times. The clock hours
-              behind each band are market configuration, so this offers the
-              band by name and the market decides what it means (ADR-009). */}
-          <div className="mt-3 grid grid-cols-1 gap-4 sm:grid-cols-2">
-            <label>
-              <span className={labelClass}>{copy.whenLabel}</span>
-              <select name="when" defaultValue="weekend" className={field}>
-                {Object.entries(copy.whenOptions).map(([value, label]) => (
-                  <option key={value} value={value}>
-                    {label}
-                  </option>
-                ))}
-                <option value={defaultDate}>{defaultDate}</option>
-              </select>
-            </label>
-            <label>
-              <span className={labelClass}>{copy.bandLabel}</span>
-              <select name="band" defaultValue="evening" className={field}>
-                {bands.map((band) => (
-                  <option key={band.key} value={band.key}>
-                    {copy.bands[band.key] ?? band.key} ({band.startsLocal}&ndash;{band.endsLocal})
-                  </option>
-                ))}
-              </select>
-            </label>
-          </div>
-
-          <div className="mt-4 grid grid-cols-2 gap-4">
-            {/* Optional, and deliberately empty. A party of four nobody asked
-                for would shape the shortlist on an assumption the user never
-                made. */}
-            <label>
-              <span className={labelClass}>{copy.partySize}</span>
-              <input type="number" name="party" min={1} max={20} className={field} />
-            </label>
-            <label>
-              <span className={labelClass}>
-                {copy.budgetCeiling} ({market.currency}, {copy.perPerson})
-              </span>
-              <input type="number" name="budget" min={0} step={10} className={field} />
-            </label>
-          </div>
-
-          <label className="mt-4 block">
-            <span className={labelClass}>{copy.musicStyles}</span>
-            <input
-              type="text"
-              name="genres"
-              placeholder="jazz, arabic, rock"
-              className={field}
-            />
-          </label>
-
-          {/* A soft signal, not a filter (doc 13). "No preference" drops it
-              from the score denominator rather than scoring it as zero. */}
-          <label className="mt-4 block">
-            <span className={labelClass}>{copy.conversation}</span>
-            <select name="conv" defaultValue="" className={field}>
-              <option value="">{copy.noPreference}</option>
-              {[1, 2, 3, 4, 5].map((level) => (
-                <option key={level} value={level}>
-                  {level}/5
-                </option>
-              ))}
-            </select>
-            <span className="mt-1 block text-xs text-neutral-500">{copy.conversationHint}</span>
-          </label>
-        </fieldset>
-
-        <fieldset>
-          <legend className={labelClass}>{copy.mustHaves}</legend>
-          <div className="mt-2 space-y-2 text-sm">
-            {[
-              { name: 'live', label: copy.requireLiveMusic, defaultChecked: true },
-              { name: 'accessible', label: copy.accessible, defaultChecked: false },
-              { name: 'outdoor', label: copy.outdoor, defaultChecked: false },
-              { name: 'family', label: copy.familyFriendly, defaultChecked: false },
-              { name: 'quiet', label: copy.quietEnough, defaultChecked: false },
-            ].map((item) => (
-              <label key={item.name} className="flex items-center gap-2">
-                <input
-                  type="checkbox"
-                  name={item.name}
-                  value="1"
-                  defaultChecked={item.defaultChecked}
-                  className="size-4 rounded border-neutral-400 text-neutral-900 focus-visible:ring-2 focus-visible:ring-neutral-900"
-                />
-                <span className="text-neutral-800">{item.label}</span>
-              </label>
-            ))}
-          </div>
-        </fieldset>
-
-        <button
-          type="submit"
-          className="rounded-md bg-neutral-900 px-5 py-2.5 text-sm font-medium text-white transition hover:bg-neutral-700 focus:outline-none focus-visible:ring-2 focus-visible:ring-neutral-900 focus-visible:ring-offset-2"
-        >
-          {copy.search}
-        </button>
-      </form>
+      {/* The same panel the results page shows, so the two cannot drift into
+          offering different filters. There are no unconfirmed counts here:
+          nothing has been searched yet, and an invented number would be worse
+          than none. */}
+      <RefinePanel
+        marketSlug={market.slug}
+        locale={market.defaultLocale}
+        currencyCode={market.currency}
+        bands={bands}
+        vocabulary={vocabulary}
+        kinds={kinds}
+        unconfirmedByMustHave={{}}
+        open
+        state={{
+          when: 'weekend',
+          band: 'evening',
+          party: undefined,
+          budget: undefined,
+          tags: [],
+          mustHaves: [],
+          outingKinds: [],
+          ageBands: [],
+          noise: undefined,
+        }}
+      />
     </main>
   );
 }

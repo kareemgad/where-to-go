@@ -116,8 +116,24 @@ interface Dictionary {
   readonly conversationHint: string;
   readonly rankingVersion: string;
   readonly confidence: Record<string, string>;
-  readonly noiseBands: Record<string, string>;
   readonly constraints: Record<string, string>;
+  readonly noiseLevel: string;
+  readonly noiseBands: Readonly<Record<string, string>>;
+  readonly whoIsComing: string;
+  readonly ageBands: Readonly<Record<string, string>>;
+  readonly outingType: string;
+  readonly experiences: string;
+  readonly matchStrength: string;
+  readonly matchedTags: string;
+  readonly needsConfirmationCount: string;
+  readonly minimumAgeIs: string;
+  readonly tooYoungForParty: string;
+  readonly isA: string;
+  readonly isNotA: string;
+  readonly refineTitle: string;
+  readonly facets: Readonly<Record<string, string>>;
+  readonly ageBandNote: string;
+  readonly budgetHint: string;
 }
 
 const EN: Dictionary = {
@@ -207,16 +223,55 @@ const EN: Dictionary = {
     unknown: 'Unknown',
     not_shown: '',
   },
-  noiseBands: { quiet: 'Quiet', moderate: 'Moderate', loud: 'Loud' },
   constraints: {
-    live_music: 'Live music',
-    budget: 'Budget',
-    wheelchair_accessible: 'Step-free access',
+    live_performance: 'Live performance confirmed',
     outdoor_seating: 'Outdoor seating',
-    family_friendly: 'Family friendly',
-    quiet_enough_to_talk: 'Quiet enough to talk',
+    indoor_seating: 'Indoor seating',
+    wheelchair_accessible: 'Step-free access',
+    kids_welcome: 'Kids welcome',
+    licensed: 'Licensed venue',
+    alcohol_free: 'Alcohol-free venue',
+    halal: 'Halal',
+    takes_reservations: 'Takes reservations',
+    open_past_midnight: 'Open past midnight',
+    budget: 'Budget',
+    minimum_age: 'Minimum age',
+    outing_type: 'Outing type',
     venue_open: 'Open',
   },
+  noiseLevel: 'Noise level',
+  noiseBands: {
+    quiet: 'Quiet',
+    moderate: 'Moderate',
+    lively: 'Lively',
+    loud: 'Loud',
+  },
+  whoIsComing: 'Who is coming',
+  ageBands: {
+    kids: 'Kids',
+    teens: 'Teens',
+    adults_only: 'Adults only',
+    seniors: 'Seniors',
+  },
+  outingType: 'Outing type',
+  experiences: 'What kind of night',
+  matchStrength: 'Match strength',
+  matchedTags: 'Matches what you asked for',
+  needsConfirmationCount: 'unconfirmed',
+  minimumAgeIs: 'Minimum age',
+  tooYoungForParty: 'Minimum age is above the youngest in your party',
+  isA: 'This is a',
+  isNotA: 'Not what you asked for; it is',
+  refineTitle: 'Refine your search',
+  facets: {
+    music: 'Music',
+    setting: 'Setting',
+    occasion: 'Occasion',
+    activity: 'Activity',
+  },
+  ageBandNote:
+    'Used only to check a venue’s minimum admission age for this search. Never stored, and never about your own age.',
+  budgetHint: 'Leave empty to see prices without filtering on them.',
 };
 
 const AR: Dictionary = {
@@ -306,16 +361,55 @@ const AR: Dictionary = {
     unknown: 'غير معروف',
     not_shown: '',
   },
-  noiseBands: { quiet: 'هادئ', moderate: 'متوسط', loud: 'عالٍ' },
+  noiseBands: {
+    quiet: 'هادئ',
+    moderate: 'متوسط',
+    lively: 'حيوي',
+    loud: 'صاخب',
+  },
   constraints: {
-    live_music: 'موسيقى حية',
-    budget: 'الميزانية',
-    wheelchair_accessible: 'وصول بدون درجات',
+    live_performance: 'عرض حي مؤكد',
     outdoor_seating: 'جلسات خارجية',
-    family_friendly: 'مناسب للعائلات',
-    quiet_enough_to_talk: 'هادئ للحديث',
+    indoor_seating: 'جلسات داخلية',
+    wheelchair_accessible: 'وصول بدون درجات',
+    kids_welcome: 'يرحب بالأطفال',
+    licensed: 'مرخّص لتقديم الكحول',
+    alcohol_free: 'خالٍ من الكحول',
+    halal: 'حلال',
+    takes_reservations: 'يقبل الحجز',
+    open_past_midnight: 'مفتوح بعد منتصف الليل',
+    budget: 'الميزانية',
+    minimum_age: 'الحد الأدنى للعمر',
+    outing_type: 'نوع الخروجة',
     venue_open: 'مفتوح',
   },
+  noiseLevel: 'مستوى الصوت',
+  whoIsComing: 'من سيأتي',
+  ageBands: {
+    kids: 'أطفال',
+    teens: 'مراهقون',
+    adults_only: 'بالغون فقط',
+    seniors: 'كبار السن',
+  },
+  outingType: 'نوع الخروجة',
+  experiences: 'أي نوع من الليالي',
+  matchStrength: 'قوة التطابق',
+  matchedTags: 'يطابق ما طلبته',
+  needsConfirmationCount: 'غير مؤكد',
+  minimumAgeIs: 'الحد الأدنى للعمر',
+  tooYoungForParty: 'الحد الأدنى للعمر أعلى من أصغر فرد في مجموعتك',
+  isA: 'هذا المكان',
+  isNotA: 'ليس ما طلبته؛ إنه',
+  refineTitle: 'عدّل بحثك',
+  facets: {
+    music: 'الموسيقى',
+    setting: 'المكان',
+    occasion: 'المناسبة',
+    activity: 'النشاط',
+  },
+  ageBandNote:
+    'يُستخدم فقط للتحقق من الحد الأدنى لعمر الدخول في هذا البحث. لا يُحفظ أبدًا، ولا يتعلق بعمرك أنت.',
+  budgetHint: 'اتركه فارغًا لعرض الأسعار دون التصفية بها.',
 };
 
 /**

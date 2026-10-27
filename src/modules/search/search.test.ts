@@ -3,10 +3,11 @@ import { describe, expect, it } from 'vitest';
 import { currency, priceBand } from '@/lib/money';
 import { fixedClock, localDate, localTime, occurrenceFromLocal } from '@/lib/time';
 import type { EvidenceState, SourceAuthority } from '@/modules/evidence/confidence';
-import { evaluateCandidateOnDay } from './eligibility';
+import { evaluateCandidateOnDay, unconfirmedCounts } from './eligibility';
 import {
   RANKING_VERSION,
   assembleResponse as assembleDays,
+  matchStrength,
   scoreCandidate as scoreOnDay,
 } from './ranking';
 import type {
@@ -21,6 +22,7 @@ import type {
   SearchResponse,
   Verdict,
 } from './types';
+import { MUST_HAVES } from './types';
 import { MAX_WINDOW_DAYS, resolveWhen } from './when';
 import type { TimeBandHours } from './when';
 
@@ -92,7 +94,11 @@ function occurrence(
   return {
     id: `occ-${startTime}-${options.date ?? FRIDAY}`,
     title: 'Fictional Set',
+    // Both, because the two mean different things: genreTags is what the
+    // source said, experienceTags is that resolved onto the vocabulary. These
+    // fixtures pass vocabulary keys, so here they coincide.
     genreTags,
+    experienceTags: genreTags,
     performanceType: 'live_band',
     artist: null,
     time,
@@ -217,14 +223,10 @@ function baseRequest(overrides: Partial<SearchRequest> = {}): SearchRequest {
     partySize: 4,
     budgetCeilingMinor: 30000,
     budgetBasis: 'per_person',
-    hardConstraints: {
-      liveMusic: true,
-      wheelchairAccessible: false,
-      outdoorSeating: false,
-      familyFriendly: false,
-      quietEnoughToTalk: false,
-    },
-    softPreferences: { genres: ['jazz'] },
+    mustHaves: ['live_performance'],
+    outingKinds: [],
+    ageBands: [],
+    softPreferences: { experienceTags: ['jazz'] },
     ...overrides,
   };
 }
@@ -360,13 +362,7 @@ describe('unknown is never a silent pass (doc 13)', () => {
 
   it('unknown accessibility becomes needs_confirmation, not eligible', () => {
     const request = baseRequest({
-      hardConstraints: {
-        liveMusic: true,
-        wheelchairAccessible: true,
-        outdoorSeating: false,
-        familyFriendly: false,
-        quietEnoughToTalk: false,
-      },
+      mustHaves: ['live_performance', 'wheelchair_accessible'],
     });
     const { verdict, outcomes } = evaluateCandidate(base, request, CLOCK);
     expect(verdict).toBe('needs_confirmation');
@@ -385,13 +381,7 @@ describe('unknown is never a silent pass (doc 13)', () => {
       }),
     });
     const request = baseRequest({
-      hardConstraints: {
-        liveMusic: true,
-        wheelchairAccessible: true,
-        outdoorSeating: false,
-        familyFriendly: false,
-        quietEnoughToTalk: false,
-      },
+      mustHaves: ['live_performance', 'wheelchair_accessible'],
     });
     expect(verdictOf(inaccessible, request)).toBe('excluded');
   });
@@ -408,13 +398,7 @@ describe('unknown is never a silent pass (doc 13)', () => {
       }),
     });
     const request = baseRequest({
-      hardConstraints: {
-        liveMusic: true,
-        wheelchairAccessible: true,
-        outdoorSeating: false,
-        familyFriendly: false,
-        quietEnoughToTalk: false,
-      },
+      mustHaves: ['live_performance', 'wheelchair_accessible'],
     });
     expect(verdictOf(disputed, request)).toBe('needs_confirmation');
   });
@@ -427,53 +411,285 @@ describe('unknown is never a silent pass (doc 13)', () => {
       experience: experience({ wheelchairAccessible: unknown<boolean>() }),
     });
     const request = baseRequest({
-      hardConstraints: {
-        liveMusic: true,
-        wheelchairAccessible: true,
-        outdoorSeating: false,
-        familyFriendly: false,
-        quietEnoughToTalk: false,
-      },
+      mustHaves: ['live_performance', 'wheelchair_accessible'],
     });
     expect(verdictOf(both, request)).toBe('excluded');
   });
 });
 
-describe('quiet conversation as a hard constraint (doc 16 scenario 2)', () => {
-  const request = baseRequest({
-    hardConstraints: {
-      liveMusic: true,
-      wheelchairAccessible: false,
-      outdoorSeating: false,
-      familyFriendly: false,
-      quietEnoughToTalk: true,
-    },
+describe('noise level as a soft preference', () => {
+  // Deliberately no longer a hard constraint. "Quiet enough to talk" excluded
+  // venues on a stored conversation score, which meant one number nobody had
+  // calibrated could remove a place from the list entirely. Noise now steers
+  // the order instead, and a venue with no noise evidence is ranked without
+  // that signal rather than hidden behind a confirmation prompt.
+  const quietRequest = baseRequest({
+    mustHaves: ['live_performance'],
+    softPreferences: { experienceTags: ['jazz'], noiseLevel: 'quiet' },
   });
 
-  it('excludes a venue with a stored low conversation score', () => {
-    const loud = candidate({
-      venueSlug: 'loud-test',
-      price: priceOf(18000, 24000),
-      occurrence: occurrence('20:00', 180, ['rock']),
-      experience: experience({ conversationFriendliness: known(1) }),
+  const loud = candidate({
+    venueSlug: 'loud-test',
+    price: priceOf(18000, 24000),
+    occurrence: occurrence('20:00', 180, ['jazz']),
+    experience: experience({
+      noiseBand: known<NoiseBand>('loud'),
+      conversationFriendliness: known(1),
+    }),
+  });
+
+  const quiet = candidate({
+    venueSlug: 'quiet-test',
+    price: priceOf(18000, 24000),
+    occurrence: occurrence('20:00', 180, ['jazz']),
+    experience: experience({
+      noiseBand: known<NoiseBand>('quiet'),
+      conversationFriendliness: known(5),
+    }),
+  });
+
+  it('keeps a loud venue eligible rather than excluding it', () => {
+    expect(verdictOf(loud, quietRequest)).toBe('eligible');
+  });
+
+  it('ranks the quiet one higher when quiet was asked for', () => {
+    expect(scoreCandidate(quiet, quietRequest).score).toBeGreaterThan(
+      scoreCandidate(loud, quietRequest).score,
+    );
+  });
+
+  it('ranks the loud one higher when loud was asked for', () => {
+    const loudRequest = baseRequest({
+      mustHaves: ['live_performance'],
+      softPreferences: { experienceTags: ['jazz'], noiseLevel: 'loud' },
     });
-    expect(verdictOf(loud, request)).toBe('excluded');
+    expect(scoreCandidate(loud, loudRequest).score).toBeGreaterThan(
+      scoreCandidate(quiet, loudRequest).score,
+    );
   });
 
-  it('flags an unknown conversation score rather than excluding or passing it', () => {
+  it('scores lively closer to loud than quiet is', () => {
+    const lively = candidate({
+      venueSlug: 'lively-test',
+      price: priceOf(18000, 24000),
+      occurrence: occurrence('20:00', 180, ['jazz']),
+      experience: experience({ noiseBand: known<NoiseBand>('lively') }),
+    });
+    const loudRequest = baseRequest({
+      mustHaves: ['live_performance'],
+      softPreferences: { experienceTags: ['jazz'], noiseLevel: 'loud' },
+    });
+    // The fourth band earns its migration here: collapsed onto three, lively
+    // and loud would be indistinguishable and this ordering impossible.
+    expect(scoreCandidate(lively, loudRequest).score).toBeGreaterThan(
+      scoreCandidate(quiet, loudRequest).score,
+    );
+  });
+
+  it('does not score the component at all when no evidence exists', () => {
     const silent = candidate({
-      venueSlug: 'no-conversation-data-test',
+      venueSlug: 'no-noise-data-test',
       price: priceOf(18000, 24000),
       occurrence: occurrence('20:00', 180, ['jazz']),
     });
-    expect(verdictOf(silent, request)).toBe('needs_confirmation');
+    // Eligible, and the atmosphere component is reported unscored rather than
+    // scored zero: we know nothing, which is not the same as knowing it is bad.
+    expect(verdictOf(silent, quietRequest)).toBe('eligible');
+    const atmosphere = scoreCandidate(silent, quietRequest).components.find(
+      (c) => c.key === 'atmosphere',
+    );
+    expect(atmosphere?.normalised).toBeNull();
+  });
+});
+
+describe('the ten must-haves', () => {
+  const base = candidate({
+    venueSlug: 'must-have-test',
+    price: priceOf(14000, 21000),
+    occurrence: occurrence('20:00', 180, ['jazz']),
+  });
+
+  const withPolicies = (overrides: Partial<CandidatePolicies>) =>
+    candidate({
+      venueSlug: 'policy-test',
+      price: priceOf(14000, 21000),
+      occurrence: occurrence('20:00', 180, ['jazz']),
+      policies: policies(overrides),
+    });
+
+  it('treats every unknown policy as needing confirmation, never as a pass', () => {
+    for (const key of MUST_HAVES) {
+      if (key === 'live_performance') continue;
+      const request = baseRequest({ mustHaves: ['live_performance', key] });
+      expect(verdictOf(base, request)).toBe('needs_confirmation');
+    }
+  });
+
+  it('passes a halal venue and excludes one known not to be', () => {
+    const request = baseRequest({ mustHaves: ['live_performance', 'halal'] });
+    expect(verdictOf(withPolicies({ halal: known(true) }), request)).toBe('eligible');
+    expect(verdictOf(withPolicies({ halal: known(false) }), request)).toBe('excluded');
+  });
+
+  it('refuses to count a weakly evidenced claim as proof', () => {
+    const request = baseRequest({ mustHaves: ['live_performance', 'halal'] });
+    // Conflicting sources are exactly when a confident yes would be worst.
+    expect(verdictOf(withPolicies({ halal: known(true, 'conflicting') }), request)).toBe(
+      'needs_confirmation',
+    );
+  });
+
+  it('counts unconfirmed candidates per must-have, independently', () => {
+    const known_ = withPolicies({ halal: known(true), licensed: known(true) });
+    const counts = unconfirmedCounts([base, known_], [...MUST_HAVES]);
+    // base knows nothing; known_ knows two of them.
+    expect(counts.halal).toBe(1);
+    expect(counts.licensed).toBe(1);
+    expect(counts.takes_reservations).toBe(2);
+    // Decided per day rather than per venue, so it is not counted here.
+    expect(counts.live_performance).toBeUndefined();
+  });
+});
+
+describe('minimum admission age', () => {
+  const venueWithAge = (minimumAge: number | null) =>
+    candidate({
+      venueSlug: `age-${minimumAge ?? 'unknown'}`,
+      price: priceOf(14000, 21000),
+      occurrence: occurrence('20:00', 180, ['jazz']),
+      policies: policies(
+        minimumAge === null ? {} : { minimumAge: known(minimumAge) },
+      ),
+    });
+
+  it('excludes a 21+ venue when kids are coming', () => {
+    const request = baseRequest({ ageBands: ['kids'] });
+    expect(verdictOf(venueWithAge(21), request)).toBe('excluded');
+  });
+
+  it('excludes a 16+ venue when teens are coming', () => {
+    const request = baseRequest({ ageBands: ['teens'] });
+    expect(verdictOf(venueWithAge(16), request)).toBe('excluded');
+  });
+
+  it('admits a venue with a verified no-minimum', () => {
+    const request = baseRequest({ ageBands: ['kids'] });
+    // Zero is a claim, not an absence: someone checked and there is no limit.
+    expect(verdictOf(venueWithAge(0), request)).toBe('eligible');
+  });
+
+  it('flags an unknown door policy rather than risking it', () => {
+    const request = baseRequest({ ageBands: ['kids'] });
+    expect(verdictOf(venueWithAge(null), request)).toBe('needs_confirmation');
+  });
+
+  it('constrains nothing when the party implies no young age', () => {
+    const request = baseRequest({ ageBands: ['adults_only', 'seniors'] });
+    expect(verdictOf(venueWithAge(null), request)).toBe('eligible');
+    expect(verdictOf(venueWithAge(21), request)).toBe('eligible');
+  });
+
+  it('takes the youngest band when several are given', () => {
+    const request = baseRequest({ ageBands: ['kids', 'adults_only'] });
+    expect(verdictOf(venueWithAge(18), request)).toBe('excluded');
+  });
+});
+
+describe('outing type', () => {
+  const restaurant = candidate({
+    venueSlug: 'restaurant-test',
+    price: priceOf(14000, 21000),
+    occurrence: occurrence('20:00', 180, ['jazz']),
+    kinds: [
+      { key: 'restaurant', isPrimary: true, evidenceState: 'source_claimed' },
+      { key: 'live_music_venue', isPrimary: false, evidenceState: 'source_claimed' },
+    ],
+  });
+
+  it('matches a venue on any of its kinds, not only the primary one', () => {
+    const request = baseRequest({ outingKinds: ['live_music_venue'] });
+    expect(verdictOf(restaurant, request)).toBe('eligible');
+  });
+
+  it('excludes a venue whose kinds are known and do not match', () => {
+    const request = baseRequest({ outingKinds: ['cafe'] });
+    expect(verdictOf(restaurant, request)).toBe('excluded');
+  });
+
+  it('flags a venue with no recorded kind rather than dropping it', () => {
+    const unknownKind = candidate({
+      venueSlug: 'unclassified-test',
+      price: priceOf(14000, 21000),
+      occurrence: occurrence('20:00', 180, ['jazz']),
+    });
+    const request = baseRequest({ outingKinds: ['cafe'] });
+    expect(verdictOf(unknownKind, request)).toBe('needs_confirmation');
+  });
+
+  it('constrains nothing when no type was asked for', () => {
+    expect(verdictOf(restaurant, baseRequest())).toBe('eligible');
+  });
+});
+
+describe('match strength', () => {
+  const tagged = (tags: { key: string; evidenceState: EvidenceState }[]) =>
+    candidate({
+      venueSlug: 'tagged-test',
+      price: priceOf(14000, 21000),
+      occurrence: occurrence('20:00', 180, []),
+      tags: tags.map((t) => ({ ...t, facet: 'music' as const })),
+    });
+
+  it('is the share of requested tags the venue is known to offer', () => {
+    const c = tagged([
+      { key: 'jazz', evidenceState: 'verified' },
+      { key: 'rooftop', evidenceState: 'verified' },
+    ]);
+    const { strength, matched } = matchStrength(c, null, ['jazz', 'rooftop']);
+    expect(matched).toEqual(['jazz', 'rooftop']);
+    expect(strength).toBe(1);
+  });
+
+  it('weights a hit by the evidence behind it', () => {
+    const verified = tagged([{ key: 'jazz', evidenceState: 'verified' }]);
+    const weak = tagged([{ key: 'jazz', evidenceState: 'stale' }]);
+    expect(matchStrength(verified, null, ['jazz']).strength).toBeGreaterThan(
+      matchStrength(weak, null, ['jazz']).strength,
+    );
+  });
+
+  it('counts the night ahead of the venue in general', () => {
+    // "They do jazz sometimes" is a weaker answer to "jazz tonight" than
+    // "tonight is the jazz night".
+    const venueOnly = tagged([{ key: 'jazz', evidenceState: 'source_claimed' }]);
+    const tonight = occurrence('20:00', 180, ['jazz'], { evidenceState: 'verified' });
+    expect(matchStrength(venueOnly, tonight, ['jazz']).strength).toBeGreaterThan(
+      matchStrength(venueOnly, null, ['jazz']).strength,
+    );
+  });
+
+  it('is zero when nothing was asked for, and scores no component', () => {
+    const c = tagged([{ key: 'jazz', evidenceState: 'verified' }]);
+    expect(matchStrength(c, null, []).strength).toBe(0);
+    const request = baseRequest({ softPreferences: { experienceTags: [] } });
+    expect(
+      scoreCandidate(c, request).components.find((x) => x.key === 'experiences'),
+    ).toBeUndefined();
+  });
+
+  it('never reports a tag that was not asked for', () => {
+    const c = tagged([
+      { key: 'jazz', evidenceState: 'verified' },
+      { key: 'shisha', evidenceState: 'verified' },
+    ]);
+    expect(matchStrength(c, null, ['jazz']).matched).toEqual(['jazz']);
   });
 });
 
 describe('scoring (gaps G1 and G2)', () => {
   const request = baseRequest({
     budgetRangeLowMinor: 15000,
-    softPreferences: { genres: ['jazz'], conversationFriendliness: 4 },
+    softPreferences: { experienceTags: ['jazz'], noiseLevel: 'moderate' },
   });
 
   it('does not reward missing evidence', () => {
@@ -507,7 +723,7 @@ describe('scoring (gaps G1 and G2)', () => {
     });
     const { components } = scoreCandidate(c, request);
     expect(components.find((x) => x.key === 'distance')).toBeUndefined();
-    expect(components.find((x) => x.key === 'music')).toBeDefined();
+    expect(components.find((x) => x.key === 'experiences')).toBeDefined();
   });
 
   it('scores a genre match above a genre miss', () => {
@@ -620,7 +836,7 @@ describe('assembling the response', () => {
     expect(response.relaxations.length).toBeGreaterThan(0);
 
     // The most commonly blocking constraint is reported first.
-    expect(response.relaxations[0]?.constraint).toBe('live_music');
+    expect(response.relaxations[0]?.constraint).toBe('live_performance');
 
     const budget = response.relaxations.find((r) => r.constraint === 'budget');
     expect(budget?.suggestion.kind).toBe('raise_budget');

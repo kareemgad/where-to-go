@@ -179,7 +179,15 @@ export async function findCandidates(
       p.id, p.venue_id, p.title, p.genre_tags, p.performance_type, p.artist,
       p.starts_at, p.ends_at, p.timezone,
       p.local_start_date, p.local_start_time, p.local_end_date, p.local_end_time,
-      p.source_expression, p.evidence_state, p.source_authority
+      p.source_expression, p.evidence_state, p.source_authority,
+      -- The programme's own words resolved onto vocabulary keys. genre_tags
+      -- stay exactly as the source wrote them, because that is what evidence
+      -- means; matching runs on the keys, because comparing a string a user
+      -- typed against a string a venue wrote matches on spelling.
+      coalesce((
+        select array_agg(distinct r.tag_key)
+        from app_resolve_experience_aliases(${request.marketId}, p.genre_tags) r
+      ), '{}'::text[])                                as experience_tags
     from publishable_occurrences p
     join venues v on v.id = p.venue_id
     where v.canonical_market_id = ${request.marketId}
@@ -200,6 +208,7 @@ export async function findCandidates(
       id: String(row['id']),
       title: String(row['title']),
       genreTags: (row['genre_tags'] as string[] | null) ?? [],
+      experienceTags: (row['experience_tags'] as string[] | null) ?? [],
       performanceType: String(row['performance_type']),
       artist: (row['artist'] as string | null) ?? null,
       time: {

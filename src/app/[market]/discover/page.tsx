@@ -11,10 +11,16 @@ import { loadMarketBySlug, marketDisplayName } from '@/modules/markets/queries';
 import { describeOutcome, describeRelaxation } from '@/modules/search/describe';
 import { evaluateAcrossDays } from '@/modules/search/eligibility';
 import { parseWhenParam, resolveWhen } from '@/modules/search/when';
-import { loadTimeBands } from '@/modules/taxonomy/queries';
+import {
+  loadExperienceTags,
+  loadOutingKinds,
+  loadTimeBands,
+} from '@/modules/taxonomy/queries';
 import { assembleResponse } from '@/modules/search/ranking';
 import { findCandidates } from '@/modules/search/repository';
+import { MUST_HAVES } from '@/modules/search/types';
 import type { SearchRequest, SearchResult } from '@/modules/search/types';
+import { RefinePanel } from '@/app/_components/refine';
 import {
   CompletenessMeter,
   ConfidenceChip,
@@ -31,11 +37,6 @@ import {
  * A hard constraint is never silently dropped to fill the page (doc 02 AC09).
  */
 
-const checkbox = z
-  .union([z.literal('1'), z.literal('on'), z.literal('true')])
-  .optional()
-  .transform((v) => v !== undefined);
-
 /**
  * Query validation. Doc 14 requires typed validation on requests; an invalid
  * date or budget must fail safely rather than reaching the matcher (doc 07).
@@ -49,26 +50,44 @@ const QuerySchema = z.object({
   party: z.coerce.number().int().min(1).max(20).optional(),
   // Whole units in the market's currency, converted to minor units below.
   budget: z.coerce.number().min(0).max(1_000_000).optional(),
-  genres: z.string().max(200).optional(),
-  conv: z.coerce.number().int().min(1).max(5).optional(),
-  live: checkbox,
-  accessible: checkbox,
-  outdoor: checkbox,
-  family: checkbox,
-  quiet: checkbox,
+  // Comma-separated vocabulary keys. Unknown keys are dropped rather than
+  // rejected: a stale shared link should still search, minus the term that no
+  // longer exists, rather than failing outright.
+  tags: z.string().max(400).optional(),
+  must: z.string().max(400).optional(),
+  kinds: z.string().max(400).optional(),
+  who: z.string().max(100).optional(),
+  noise: z.enum(['quiet', 'moderate', 'lively', 'loud']).optional(),
 });
+
+/** Comma-separated keys from a URL, folded and filtered against a whitelist. */
+function keysFrom<T extends string>(raw: string | undefined, allowed: readonly T[]): T[] {
+  if (!raw) return [];
+  const permitted = new Set<string>(allowed);
+  const seen = new Set<T>();
+  for (const part of raw.split(',')) {
+    const key = part.trim().toLowerCase();
+    if (permitted.has(key)) seen.add(key as T);
+  }
+  return [...seen];
+}
+
+const AGE_BANDS = ['kids', 'teens', 'adults_only', 'seniors'] as const;
 
 function ResultCard({
   result,
   marketSlug,
   locale,
   currencyCode,
+  tagLabels,
   position,
 }: {
   result: SearchResult;
   marketSlug: string;
   locale: string;
   currencyCode: string;
+  /** Vocabulary key to display text, so a card never shows a raw key. */
+  tagLabels: Readonly<Record<string, string>>;
   position?: number;
 }) {
   const copy = copyFor(locale);
@@ -148,6 +167,16 @@ function ResultCard({
         items={result.outcomes.map((o) => describeOutcome(o, locale, currencyCode))}
       />
 
+      {/* What was asked for and found, named. Deliberately not a percentage
+          badge: a number invites being read as a probability, and this is
+          overlap between two lists of stored claims. */}
+      {result.matchedTags.length > 0 ? (
+        <p className="mt-2 text-xs text-neutral-700">
+          <span className="font-medium">{copy.matchedTags}:</span>{' '}
+          {result.matchedTags.map((key) => tagLabels[key] ?? key).join(' · ')}
+        </p>
+      ) : null}
+
       <CompletenessMeter fraction={result.informationCompleteness} locale={locale} />
 
       {occurrence?.time.sourceExpression ? (
@@ -219,11 +248,6 @@ export default async function Discover({
 
   const q = parsed.data;
   const exponent = code === 'JPY' ? 0 : 2;
-  const genres = (q.genres ?? '')
-    .split(',')
-    .map((g) => g.trim().toLowerCase())
-    .filter((g) => g.length > 0);
-
   const whenSpec = parseWhenParam(q.when);
   if (!whenSpec) {
     return (
@@ -249,6 +273,14 @@ export default async function Discover({
     ...(q.band !== undefined ? { band: q.band } : {}),
   });
 
+  // The market's own vocabulary, used to validate what arrived in the URL. A
+  // key this market does not offer is not a filter, it is a typo or a link
+  // from somewhere else.
+  const [vocabulary, kinds] = await Promise.all([
+    loadExperienceTags(sql, market.id, market.defaultLocale),
+    loadOutingKinds(sql, market.id, market.defaultLocale),
+  ]);
+
   const request: SearchRequest = {
     marketId: market.id,
     timezone: market.timezone,
@@ -256,16 +288,18 @@ export default async function Discover({
     locale: market.defaultLocale,
     when,
     budgetBasis: 'per_person',
-    hardConstraints: {
-      liveMusic: q.live,
-      wheelchairAccessible: q.accessible,
-      outdoorSeating: q.outdoor,
-      familyFriendly: q.family,
-      quietEnoughToTalk: q.quiet,
-    },
+    mustHaves: keysFrom(q.must, MUST_HAVES),
+    outingKinds: keysFrom(
+      q.kinds,
+      kinds.map((k) => k.key),
+    ),
+    ageBands: keysFrom(q.who, AGE_BANDS),
     softPreferences: {
-      genres,
-      ...(q.conv !== undefined ? { conversationFriendliness: q.conv } : {}),
+      experienceTags: keysFrom(
+        q.tags,
+        vocabulary.map((t) => t.key),
+      ),
+      ...(q.noise !== undefined ? { noiseLevel: q.noise } : {}),
     },
     ...(q.party !== undefined ? { partySize: q.party } : {}),
     ...(q.budget !== undefined
@@ -281,6 +315,8 @@ export default async function Discover({
   const response = assembleResponse(evaluated, request);
 
   const anyDemo = candidates.some((c) => c.isDemoData);
+  const bands = await loadTimeBands(sql, market.id);
+  const tagLabels = Object.fromEntries(vocabulary.map((t) => [t.key, t.label]));
 
   return (
     <main className="mx-auto max-w-3xl px-6 py-12">
@@ -309,6 +345,31 @@ export default async function Discover({
           <DemoBanner locale={market.defaultLocale} />
         </div>
       ) : null}
+
+      <RefinePanel
+        marketSlug={market.slug}
+        locale={market.defaultLocale}
+        currencyCode={market.currency}
+        bands={bands}
+        vocabulary={vocabulary}
+        kinds={kinds}
+        unconfirmedByMustHave={response.unconfirmedByMustHave}
+        // Opened when nothing matched: the panel is the answer to "why", and
+        // making the user find it first would be the wrong default exactly
+        // when they need it.
+        open={response.eligible.length === 0}
+        state={{
+          when: q.when,
+          band: q.band,
+          party: q.party,
+          budget: q.budget,
+          tags: request.softPreferences.experienceTags,
+          mustHaves: request.mustHaves,
+          outingKinds: request.outingKinds,
+          ageBands: request.ageBands,
+          noise: request.softPreferences.noiseLevel,
+        }}
+      />
 
       <section className="mt-8">
         <h2 className="text-sm font-semibold uppercase tracking-wide text-neutral-500">
@@ -343,6 +404,7 @@ export default async function Discover({
                 marketSlug={market.slug}
                 locale={market.defaultLocale}
                 currencyCode={market.currency}
+                tagLabels={tagLabels}
                 position={index + 1}
               />
             ))}
@@ -367,6 +429,7 @@ export default async function Discover({
                     marketSlug={market.slug}
                     locale={market.defaultLocale}
                     currencyCode={market.currency}
+                    tagLabels={tagLabels}
                   />
                 ))}
               </div>

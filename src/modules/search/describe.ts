@@ -65,10 +65,16 @@ export function describeOutcome(
         return copy.notVerified;
       case 'attribute_unknown':
         return copy.notVerified;
-      case 'noise_acceptable':
-        return `${g.score}/5`;
-      case 'noise_too_loud':
-        return `${g.score}/5`;
+      case 'age_minimum_ok':
+        // The number, not just a tick: "minimum age 18" is what someone needs
+        // to know when deciding whether to bring a sixteen-year-old.
+        return `${copy.minimumAgeIs} ${g.minimumAge}`;
+      case 'age_minimum_too_high':
+        return `${copy.minimumAgeIs} ${g.minimumAge} — ${copy.tooYoungForParty} (${g.youngestInParty})`;
+      case 'kind_matches':
+        return `${copy.isA} ${g.key}`;
+      case 'kind_mismatch':
+        return `${copy.isNotA} ${g.has.join(', ')}`;
       case 'venue_not_open':
         return copy.excluded;
     }

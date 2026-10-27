@@ -17,18 +17,19 @@
 
 import { compareToCeiling, money, priceBand } from '@/lib/money';
 import { hasEnded, overlapsWindow, searchWindow } from '@/lib/time';
-import type { Clock } from '@/lib/time';
+import type { Clock, LocalDate } from '@/lib/time';
 import { satisfiesHardConstraint } from '@/modules/evidence/confidence';
-import type { Attributed } from './types';
+import { YOUNGEST_IN_BAND } from './types';
 import type {
+  Attributed,
   Candidate,
   CandidateOccurrence,
   ConstraintOutcome,
   DayEvaluation,
+  MustHave,
   SearchRequest,
   Verdict,
 } from './types';
-import type { LocalDate } from '@/lib/time';
 
 /**
  * Evaluate one boolean published attribute against a requirement.
@@ -39,11 +40,7 @@ import type { LocalDate } from '@/lib/time';
  */
 function evaluateBoolean(
   attribute: Attributed<boolean>,
-  required: boolean,
 ): Pick<ConstraintOutcome, 'outcome' | 'grounds'> {
-  if (!required) {
-    return { outcome: 'pass', grounds: { kind: 'attribute_true', evidenceState: attribute.evidenceState } };
-  }
   if (attribute.value === null || !satisfiesHardConstraint(attribute.evidenceState)) {
     return { outcome: 'unconfirmed', grounds: { kind: 'attribute_unknown' } };
   }
@@ -58,6 +55,27 @@ function evaluateBoolean(
     grounds: { kind: 'attribute_false', evidenceState: attribute.evidenceState },
   };
 }
+
+/**
+ * Where each must-have reads its answer from.
+ *
+ * A table rather than a switch so the list of must-haves, the UI controls and
+ * the unconfirmed counts all iterate the same thing. `live_performance` is
+ * absent because it is the one that depends on the day.
+ */
+const BOOLEAN_SOURCES: Readonly<
+  Record<Exclude<MustHave, 'live_performance'>, (c: Candidate) => Attributed<boolean>>
+> = {
+  outdoor_seating: (c) => c.experience.outdoorSeating,
+  indoor_seating: (c) => c.experience.indoorSeating,
+  wheelchair_accessible: (c) => c.experience.wheelchairAccessible,
+  kids_welcome: (c) => c.experience.familyFriendly,
+  licensed: (c) => c.policies.licensed,
+  alcohol_free: (c) => c.policies.alcoholFree,
+  halal: (c) => c.policies.halal,
+  takes_reservations: (c) => c.policies.takesReservations,
+  open_past_midnight: (c) => c.policies.openPastMidnight,
+};
 
 /**
  * The first recommendable occurrence overlapping one day's window.
@@ -92,11 +110,19 @@ function occurrenceOnDay(
   return usable[0] ?? null;
 }
 
+/** The youngest age the stated party implies, or null if none is implied. */
+function youngestInParty(request: SearchRequest): number | null {
+  const ages = request.ageBands
+    .map((band) => YOUNGEST_IN_BAND[band])
+    .filter((age): age is number => age !== null);
+  return ages.length === 0 ? null : Math.min(...ages);
+}
+
 /**
  * Judge one candidate against one day of the window.
  *
- * Everything except the live-music constraint is a property of the venue and
- * does not vary by day, but it is re-evaluated per day anyway: a result
+ * Everything except the live-performance constraint is a property of the venue
+ * and does not vary by day, but it is re-evaluated per day anyway: a result
  * carries the outcomes that justify it, and outcomes computed against a
  * different day than the one shown would be an explanation of something else.
  */
@@ -108,9 +134,10 @@ export function evaluateCandidateOnDay(
 ): DayEvaluation {
   const outcomes: ConstraintOutcome[] = [];
   const occurrence = occurrenceOnDay(candidate, request, date, clock);
+  const required = new Set(request.mustHaves);
 
-  // --- live music on this date, in this window -----------------------------
-  if (request.hardConstraints.liveMusic) {
+  // --- a live performance on this date, in this window ---------------------
+  if (required.has('live_performance')) {
     // Doc 02 AC01 and AC02 together: a venue with no confirmed performance on
     // this date is excluded, and a past occurrence is never upcoming. The
     // repository only returns recommendable occurrences, so an empty result
@@ -119,16 +146,84 @@ export function evaluateCandidateOnDay(
     outcomes.push(
       occurrence
         ? {
-            constraint: 'live_music',
+            constraint: 'live_performance',
             outcome: 'pass',
             grounds: { kind: 'confirmed_occurrence', occurrenceId: occurrence.id },
           }
         : {
-            constraint: 'live_music',
+            constraint: 'live_performance',
             outcome: 'fail',
             grounds: { kind: 'no_occurrence_in_window' },
           },
     );
+  }
+
+  // --- the nine stored must-haves ------------------------------------------
+  for (const [key, read] of Object.entries(BOOLEAN_SOURCES) as [
+    Exclude<MustHave, 'live_performance'>,
+    (c: Candidate) => Attributed<boolean>,
+  ][]) {
+    if (!required.has(key)) continue;
+    outcomes.push({ constraint: key, ...evaluateBoolean(read(candidate)) });
+  }
+
+  // --- minimum admission age -----------------------------------------------
+  const youngest = youngestInParty(request);
+  if (youngest !== null) {
+    const minimumAge = candidate.policies.minimumAge;
+    if (minimumAge.value === null || !satisfiesHardConstraint(minimumAge.evidenceState)) {
+      // Nobody has told us the door policy. Turning up with a thirteen-year-old
+      // and being refused is the outcome this refuses to risk silently.
+      outcomes.push({
+        constraint: 'minimum_age',
+        outcome: 'unconfirmed',
+        grounds: { kind: 'attribute_unknown' },
+      });
+    } else if (minimumAge.value > youngest) {
+      outcomes.push({
+        constraint: 'minimum_age',
+        outcome: 'fail',
+        grounds: {
+          kind: 'age_minimum_too_high',
+          minimumAge: minimumAge.value,
+          youngestInParty: youngest,
+        },
+      });
+    } else {
+      outcomes.push({
+        constraint: 'minimum_age',
+        outcome: 'pass',
+        grounds: { kind: 'age_minimum_ok', minimumAge: minimumAge.value },
+      });
+    }
+  }
+
+  // --- outing type ----------------------------------------------------------
+  if (request.outingKinds.length > 0) {
+    const wanted = new Set(request.outingKinds);
+    const credible = candidate.kinds.filter((k) => satisfiesHardConstraint(k.evidenceState));
+    const hit = credible.find((k) => wanted.has(k.key));
+
+    if (hit) {
+      outcomes.push({
+        constraint: 'outing_type',
+        outcome: 'pass',
+        grounds: { kind: 'kind_matches', key: hit.key },
+      });
+    } else if (credible.length === 0) {
+      outcomes.push({
+        constraint: 'outing_type',
+        outcome: 'unconfirmed',
+        grounds: { kind: 'attribute_unknown' },
+      });
+    } else {
+      // We know what this place is, and it is not what was asked for.
+      outcomes.push({
+        constraint: 'outing_type',
+        outcome: 'fail',
+        grounds: { kind: 'kind_mismatch', has: credible.map((k) => k.key) },
+      });
+    }
   }
 
   // --- budget ceiling ------------------------------------------------------
@@ -192,53 +287,6 @@ export function evaluateCandidateOnDay(
     }
   }
 
-  // --- boolean access and amenity constraints ------------------------------
-  if (request.hardConstraints.wheelchairAccessible) {
-    outcomes.push({
-      constraint: 'wheelchair_accessible',
-      ...evaluateBoolean(candidate.experience.wheelchairAccessible, true),
-    });
-  }
-  if (request.hardConstraints.outdoorSeating) {
-    outcomes.push({
-      constraint: 'outdoor_seating',
-      ...evaluateBoolean(candidate.experience.outdoorSeating, true),
-    });
-  }
-  if (request.hardConstraints.familyFriendly) {
-    outcomes.push({
-      constraint: 'family_friendly',
-      ...evaluateBoolean(candidate.experience.familyFriendly, true),
-    });
-  }
-
-  // --- quiet enough to hold a conversation ---------------------------------
-  if (request.hardConstraints.quietEnoughToTalk) {
-    const conversation = candidate.experience.conversationFriendliness;
-    if (conversation.value === null || !satisfiesHardConstraint(conversation.evidenceState)) {
-      outcomes.push({
-        constraint: 'quiet_enough_to_talk',
-        outcome: 'unconfirmed',
-        grounds: { kind: 'attribute_unknown' },
-      });
-    } else if (conversation.value >= 3) {
-      outcomes.push({
-        constraint: 'quiet_enough_to_talk',
-        outcome: 'pass',
-        grounds: { kind: 'noise_acceptable', score: conversation.value },
-      });
-    } else {
-      // Doc 16 scenario 2: exclude verified high-noise venues when quiet
-      // conversation is a requirement. Never invent a sound measurement — this
-      // is a stored conversation score, not a decibel reading.
-      outcomes.push({
-        constraint: 'quiet_enough_to_talk',
-        outcome: 'fail',
-        grounds: { kind: 'noise_too_loud', score: conversation.value },
-      });
-    }
-  }
-
   const verdict: Verdict = outcomes.some((o) => o.outcome === 'fail')
     ? 'excluded'
     : outcomes.some((o) => o.outcome === 'unconfirmed')
@@ -261,4 +309,29 @@ export function evaluateAcrossDays(
   clock: Clock,
 ): DayEvaluation[] {
   return request.when.days.map((date) => evaluateCandidateOnDay(candidate, request, date, clock));
+}
+
+/**
+ * How many candidates each must-have could not decide, whether or not it is
+ * currently switched on.
+ *
+ * Shown beside the controls so a filter that would quietly move half the
+ * catalogue into the collapsed section says so before it is switched on. Run
+ * against every must-have independently, because the question is "what would
+ * this one cost me", not "what did the combination cost me".
+ */
+export function unconfirmedCounts(
+  candidates: readonly Candidate[],
+  mustHaves: readonly MustHave[],
+): Partial<Record<MustHave, number>> {
+  const counts: Partial<Record<MustHave, number>> = {};
+  for (const key of mustHaves) {
+    if (key === 'live_performance') continue; // decided per day, not per venue
+    const read = BOOLEAN_SOURCES[key];
+    counts[key] = candidates.filter((c) => {
+      const attribute = read(c);
+      return attribute.value === null || !satisfiesHardConstraint(attribute.evidenceState);
+    }).length;
+  }
+  return counts;
 }

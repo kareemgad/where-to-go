@@ -76,10 +76,14 @@ function describe(outcome: ConstraintOutcome, locale: string, currencyCode: stri
       return `not available (${g.evidenceState})`;
     case 'attribute_unknown':
       return 'not verified';
-    case 'noise_acceptable':
-      return `conversation score ${g.score}/5`;
-    case 'noise_too_loud':
-      return `conversation score ${g.score}/5 is below your requirement`;
+    case 'age_minimum_ok':
+      return `minimum age ${g.minimumAge}`;
+    case 'age_minimum_too_high':
+      return `minimum age ${g.minimumAge}, above the youngest in your party (${g.youngestInParty})`;
+    case 'kind_matches':
+      return `this is a ${g.key}`;
+    case 'kind_mismatch':
+      return `not what you asked for; it is ${g.has.join(', ')}`;
     case 'venue_not_open':
       return 'venue is not open';
   }
@@ -161,14 +165,12 @@ async function runScenario(marketSlug: string, label: string) {
     partySize: 4,
     budgetCeilingMinor: ceilingMinor,
     budgetBasis: 'per_person',
-    hardConstraints: {
-      liveMusic: true,
-      wheelchairAccessible: false,
-      outdoorSeating: false,
-      familyFriendly: false,
-      quietEnoughToTalk: false,
-    },
-    softPreferences: { genres: ['jazz', 'arabic'], conversationFriendliness: 4 },
+    mustHaves: ['live_performance'],
+    outingKinds: [],
+    ageBands: [],
+    // Vocabulary keys, not free text. 'arabic' is an alias; 'arabic_music' is
+    // the term, and the parser is what turns one into the other.
+    softPreferences: { experienceTags: ['jazz', 'arabic_music'], noiseLevel: 'moderate' },
   };
 
   console.log(`\n${'='.repeat(78)}`);
@@ -281,21 +283,17 @@ ${'='.repeat(78)}`);
       }),
       budgetCeilingMinor: 5000,
       budgetBasis: 'per_person',
-      hardConstraints: {
-        liveMusic: true,
-        wheelchairAccessible: true,
-        outdoorSeating: false,
-        familyFriendly: false,
-        quietEnoughToTalk: true,
-      },
-      softPreferences: { genres: ['jazz'] },
+      mustHaves: ['live_performance', 'wheelchair_accessible', 'halal'],
+      outingKinds: [],
+      ageBands: ['kids'],
+      softPreferences: { experienceTags: ['jazz'], noiseLevel: 'quiet' },
     };
 
     console.log(`\n${'='.repeat(78)}`);
     console.log('ZERO-RESULT PATH — doc 02 AC09');
     console.log(`${'='.repeat(78)}`);
     console.log(
-      `query: a Tuesday, live music, accessible, quiet, ceiling ${format(money(5000, currency(market.currency)), market.defaultLocale)}`,
+      `query: a Tuesday, live music, step-free, halal, kids coming, ceiling ${format(money(5000, currency(market.currency)), market.defaultLocale)}`,
     );
 
     const candidates = await findCandidates(sql, request, clock);

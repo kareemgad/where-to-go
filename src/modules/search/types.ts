@@ -11,22 +11,76 @@ import type { EvidenceState, SourceAuthority } from '@/modules/evidence/confiden
 import type { LocalDate, OccurrenceTime } from '@/lib/time';
 import type { ResolvedWhen } from './when';
 
-/** A constraint the user requires, as opposed to a preference they'd like. */
-export interface HardConstraints {
-  /** Doc 02: a live performance in the window, with evidence for that date. */
-  readonly liveMusic: boolean;
-  readonly wheelchairAccessible: boolean;
-  readonly outdoorSeating: boolean;
-  readonly familyFriendly: boolean;
-  /** Conversation score of 3 or better. */
-  readonly quietEnoughToTalk: boolean;
-}
+/**
+ * The ten things a user can require rather than prefer.
+ *
+ * A list rather than ten booleans: the UI shows a count of unconfirmed
+ * candidates beside each one, and iterating a fixed list is what makes that
+ * possible without naming all ten in three more places.
+ *
+ * Every one of these is tri-state in evaluation (ADR-011). Unknown is never a
+ * pass — `live_performance` is the only one that can fail outright on absence,
+ * because "no confirmed performance" is a fact about our evidence rather than
+ * a gap in it.
+ */
+export type MustHave =
+  | 'live_performance'
+  | 'outdoor_seating'
+  | 'indoor_seating'
+  | 'wheelchair_accessible'
+  | 'kids_welcome'
+  | 'licensed'
+  | 'alcohol_free'
+  | 'halal'
+  | 'takes_reservations'
+  | 'open_past_midnight';
+
+export const MUST_HAVES: readonly MustHave[] = [
+  'live_performance',
+  'outdoor_seating',
+  'indoor_seating',
+  'wheelchair_accessible',
+  'kids_welcome',
+  'licensed',
+  'alcohol_free',
+  'halal',
+  'takes_reservations',
+  'open_past_midnight',
+];
+
+/**
+ * Who is coming, in bands.
+ *
+ * Bands about companions, never the user's own age, and never stored: the
+ * selection lives in the URL for the life of one search. Only the two bands
+ * with a minimum-age consequence gate anything; the other two are context the
+ * soft signals use.
+ */
+export type AgeBand = 'kids' | 'teens' | 'adults_only' | 'seniors';
+
+/**
+ * The youngest age each band implies, for comparison against a venue's
+ * minimum admission age. Deliberately conservative: a thirteen-year-old
+ * refused at the door is a worse outcome than a venue missing from a list.
+ */
+export const YOUNGEST_IN_BAND: Readonly<Record<AgeBand, number | null>> = {
+  kids: 0,
+  teens: 13,
+  // Neither constrains a minimum age.
+  adults_only: null,
+  seniors: null,
+};
 
 export interface SoftPreferences {
-  /** Lowercase genre tags. Preference, never a hard filter (doc 03). */
-  readonly genres: readonly string[];
+  /**
+   * Vocabulary keys, not free text. The parser resolves what the user typed
+   * onto these before the engine sees it, so matching compares meanings
+   * rather than spellings.
+   */
+  readonly experienceTags: readonly string[];
+  /** One of the four bands, or omitted for no preference. */
+  readonly noiseLevel?: NoiseBand;
   /** 1-5; omitted means no preference rather than "don't care about it". */
-  readonly conversationFriendliness?: number;
   readonly energy?: number;
   readonly prefersOutdoor?: boolean;
 }
@@ -58,7 +112,11 @@ export interface SearchRequest {
 
   readonly neighborhoodId?: string;
 
-  readonly hardConstraints: HardConstraints;
+  readonly mustHaves: readonly MustHave[];
+  /** Outing kinds the user will accept. Empty means no preference. */
+  readonly outingKinds: readonly string[];
+  /** Who is coming. Empty means unstated, which constrains nothing. */
+  readonly ageBands: readonly AgeBand[];
   readonly softPreferences: SoftPreferences;
 }
 
@@ -118,7 +176,10 @@ export interface CandidateKind {
 export interface CandidateOccurrence {
   readonly id: string;
   readonly title: string;
+  /** As the source wrote them, kept verbatim for display and audit. */
   readonly genreTags: readonly string[];
+  /** The same programme resolved onto vocabulary keys, for matching. */
+  readonly experienceTags: readonly string[];
   readonly performanceType: string;
   readonly artist: string | null;
   readonly time: OccurrenceTime;
@@ -160,14 +221,7 @@ export interface Candidate {
  */
 export type Verdict = 'eligible' | 'needs_confirmation' | 'excluded';
 
-export type ConstraintKey =
-  | 'live_music'
-  | 'budget'
-  | 'wheelchair_accessible'
-  | 'outdoor_seating'
-  | 'family_friendly'
-  | 'quiet_enough_to_talk'
-  | 'venue_open';
+export type ConstraintKey = MustHave | 'budget' | 'minimum_age' | 'outing_type' | 'venue_open';
 
 /** Why a constraint passed, failed, or could not be decided. */
 export interface ConstraintOutcome {
@@ -188,13 +242,25 @@ export interface ConstraintOutcome {
     | { readonly kind: 'attribute_true'; readonly evidenceState: EvidenceState }
     | { readonly kind: 'attribute_false'; readonly evidenceState: EvidenceState }
     | { readonly kind: 'attribute_unknown' }
-    | { readonly kind: 'noise_acceptable'; readonly score: number }
-    | { readonly kind: 'noise_too_loud'; readonly score: number }
+    | { readonly kind: 'age_minimum_ok'; readonly minimumAge: number }
+    | {
+        readonly kind: 'age_minimum_too_high';
+        readonly minimumAge: number;
+        readonly youngestInParty: number;
+      }
+    | { readonly kind: 'kind_matches'; readonly key: string }
+    | { readonly kind: 'kind_mismatch'; readonly has: readonly string[] }
     | { readonly kind: 'venue_not_open' };
 }
 
 export interface ScoreComponent {
-  readonly key: 'music' | 'atmosphere' | 'budget' | 'distance' | 'seating_access' | 'freshness';
+  readonly key:
+    | 'experiences'
+    | 'atmosphere'
+    | 'budget'
+    | 'distance'
+    | 'seating_access'
+    | 'freshness';
   readonly weight: number;
   /** 0..1, or null when there was no evidence to score. */
   readonly normalised: number | null;
@@ -231,6 +297,19 @@ export interface SearchResult {
    * documented venue reads as "we know little" rather than "it is poor".
    */
   readonly informationCompleteness: number;
+  /**
+   * How much of what the user asked for this place is known to offer: overlap
+   * between the chosen tags and the stored ones, weighted by the evidence
+   * behind each. Zero to one.
+   *
+   * Never presented as confidence, and never a model's opinion. It is
+   * arithmetic over stored claims, and a venue scores low here either because
+   * it does not match or because nobody has told us it does — which is why
+   * informationCompleteness is reported beside it rather than folded in.
+   */
+  readonly matchStrength: number;
+  /** Which of the requested tags were found, for the explanation. */
+  readonly matchedTags: readonly string[];
   readonly rankingVersion: string;
 }
 
@@ -247,6 +326,12 @@ export interface SearchResponse {
    * the one asked is worse than one that says so.
    */
   readonly truncatedFromDays: number | null;
+  /**
+   * Per must-have, how many candidates could not be decided either way.
+   * Surfaced beside each control so a filter that would quietly hide half the
+   * catalogue says so before it is switched on (ADR-011).
+   */
+  readonly unconfirmedByMustHave: Readonly<Partial<Record<MustHave, number>>>;
 }
 
 export interface Relaxation {
