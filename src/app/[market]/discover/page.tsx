@@ -4,12 +4,14 @@ import { z } from 'zod';
 
 import { db } from '@/db/client';
 import { currency, formatBand } from '@/lib/money';
-import { formatLocalRange, localDate, localTime, systemClock } from '@/lib/time';
+import { formatLocalDay, formatLocalRange, systemClock } from '@/lib/time';
 import { confidenceLabel } from '@/modules/evidence/confidence';
 import { copyFor } from '@/modules/i18n/copy';
 import { loadMarketBySlug, marketDisplayName } from '@/modules/markets/queries';
 import { describeOutcome, describeRelaxation } from '@/modules/search/describe';
-import { evaluateCandidate } from '@/modules/search/eligibility';
+import { evaluateAcrossDays } from '@/modules/search/eligibility';
+import { parseWhenParam, resolveWhen } from '@/modules/search/when';
+import { loadTimeBands } from '@/modules/taxonomy/queries';
 import { assembleResponse } from '@/modules/search/ranking';
 import { findCandidates } from '@/modules/search/repository';
 import type { SearchRequest, SearchResult } from '@/modules/search/types';
@@ -39,9 +41,11 @@ const checkbox = z
  * date or budget must fail safely rather than reaching the matcher (doc 07).
  */
 const QuerySchema = z.object({
-  date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
-  from: z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/).default('19:00'),
-  to: z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/).default('23:00'),
+  // tonight | tomorrow | weekend | nextN | a date | a date range.
+  when: z.string().min(1).max(40).default('tonight'),
+  band: z.enum(['brunch', 'afternoon', 'evening', 'late_night']).optional(),
+  // Optional, with no default. A party of four nobody asked for would shape
+  // the shortlist on an assumption the user never made.
   party: z.coerce.number().int().min(1).max(20).optional(),
   // Whole units in the market's currency, converted to minor units below.
   budget: z.coerce.number().min(0).max(1_000_000).optional(),
@@ -69,7 +73,9 @@ function ResultCard({
 }) {
   const copy = copyFor(locale);
   const c = result.candidate;
-  const occurrence = c.occurrence;
+  // The occurrence on the day this result was matched on, not whichever one
+  // the venue happens to list first.
+  const occurrence = result.occurrence;
 
   const handoff = new URLSearchParams();
   if (occurrence) handoff.set('occurrence', occurrence.id);
@@ -108,6 +114,17 @@ function ResultCard({
           {occurrence.time.localEndDate !== occurrence.time.localStartDate ? (
             <span className="ms-1 text-xs text-neutral-500">({copy.crossesMidnight})</span>
           ) : null}
+        </p>
+      ) : null}
+
+      {/* A venue matching four nights should not read as matching one. The
+          result is shown on its best night and the rest are named. */}
+      {result.otherMatchingDates.length > 0 ? (
+        <p className="mt-1 text-xs text-neutral-600">
+          {copy.alsoOn}{' '}
+          {result.otherMatchingDates
+            .map((date) => formatLocalDay(date, occurrence?.time.timezone ?? '', locale))
+            .join(' · ')}
         </p>
       ) : null}
 
@@ -184,7 +201,7 @@ export default async function Discover({
       <main className="mx-auto max-w-3xl px-6 py-12">
         <h1 className="text-2xl font-semibold text-neutral-900">{name}</h1>
         <div className="mt-6 rounded-lg border border-rose-300 bg-rose-50 px-4 py-3 text-sm text-rose-900">
-          That search could not be read. Check the date, times and budget.
+          That search could not be read. Check the dates and the budget.
           <ul className="mt-2 list-disc ps-5">
             {parsed.error.issues.map((issue) => (
               <li key={issue.path.join('.')}>
@@ -207,14 +224,37 @@ export default async function Discover({
     .map((g) => g.trim().toLowerCase())
     .filter((g) => g.length > 0);
 
+  const whenSpec = parseWhenParam(q.when);
+  if (!whenSpec) {
+    return (
+      <main className="mx-auto max-w-3xl px-6 py-12">
+        <h1 className="text-2xl font-semibold text-neutral-900">{name}</h1>
+        <div className="mt-6 rounded-lg border border-rose-300 bg-rose-50 px-4 py-3 text-sm text-rose-900">
+          &ldquo;{q.when}&rdquo; is not a window this search understands. Try a date, a range like
+          2026-11-13..2026-11-16, or one of tonight, tomorrow, weekend.
+        </div>
+        <Link href={`/${market.slug}`} className="mt-6 inline-block text-sm underline">
+          {copy.findNight}
+        </Link>
+      </main>
+    );
+  }
+
+  const when = resolveWhen({
+    when: whenSpec,
+    bands: await loadTimeBands(sql, market.id),
+    timezone: market.timezone,
+    weekendDays: market.weekendDays,
+    clock: systemClock,
+    ...(q.band !== undefined ? { band: q.band } : {}),
+  });
+
   const request: SearchRequest = {
     marketId: market.id,
     timezone: market.timezone,
     currency: code,
     locale: market.defaultLocale,
-    date: localDate(q.date),
-    fromTime: localTime(q.from),
-    toTime: localTime(q.to),
+    when,
     budgetBasis: 'per_person',
     hardConstraints: {
       liveMusic: q.live,
@@ -236,7 +276,7 @@ export default async function Discover({
   const candidates = await findCandidates(sql, request, systemClock);
   const evaluated = candidates.map((candidate) => ({
     candidate,
-    ...evaluateCandidate(candidate, request, systemClock),
+    days: evaluateAcrossDays(candidate, request, systemClock),
   }));
   const response = assembleResponse(evaluated, request);
 
@@ -251,9 +291,18 @@ export default async function Discover({
         </Link>
       </div>
       <p className="mt-1 font-mono text-xs text-neutral-500">
-        {q.date} {q.from}–{q.to} · {market.timezone} · {market.currency}
+        {when.days.length === 1
+          ? when.days[0]
+          : `${when.days[0]} → ${when.days[when.days.length - 1]} (${when.days.length} days)`}{' '}
+        {when.fromTime}–{when.toTime} · {market.timezone} · {market.currency}
         {request.budgetCeilingMinor !== undefined ? ` · ≤ ${q.budget}` : ''}
       </p>
+      {response.truncatedFromDays !== null ? (
+        <p className="mt-2 rounded-lg border border-amber-300 bg-amber-50 px-4 py-2 text-sm text-amber-900">
+          You asked for {response.truncatedFromDays} days. A search covers at most{' '}
+          {when.days.length}, so these results stop at {when.days[when.days.length - 1]}.
+        </p>
+      ) : null}
 
       {anyDemo ? (
         <div className="mt-6">

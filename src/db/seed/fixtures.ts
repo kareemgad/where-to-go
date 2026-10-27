@@ -36,6 +36,12 @@ export interface MarketFixture {
   timezone: string;
   currency: string;
   defaultLocale: string;
+  /**
+   * ISO weekday numbers this market treats as the weekend, Monday 1 through
+   * Sunday 7. Stated per market because "this weekend" is not the same days
+   * everywhere, and the resolver reads it rather than assuming.
+   */
+  weekendDays: number[];
   locales: { locale: string; isDefault: boolean }[];
   /** Rough operating envelope: [minLon, minLat, maxLon, maxLat]. Fictional. */
   envelope: [number, number, number, number];
@@ -78,6 +84,8 @@ export const MARKETS: MarketFixture[] = [
     timezone: 'Asia/Dubai',
     currency: 'AED',
     defaultLocale: 'en-AE',
+    // The UAE moved to a Saturday-Sunday weekend in 2022.
+    weekendDays: [6, 7],
     locales: [
       { locale: 'en-AE', isDefault: true },
       { locale: 'ar-AE', isDefault: false },
@@ -140,6 +148,9 @@ export const MARKETS: MarketFixture[] = [
     timezone: 'Africa/Cairo',
     currency: 'EGP',
     defaultLocale: 'ar-EG',
+    // Egypt's weekend is Friday and Saturday, which is the whole reason this
+    // is market configuration and not a constant.
+    weekendDays: [5, 6],
     locales: [
       { locale: 'ar-EG', isDefault: true },
       { locale: 'en-EG', isDefault: false },
@@ -401,6 +412,22 @@ export const VENUES: VenueFixture[] = [
         performanceType: 'live_band',
         artist: 'The Test Quartet',
         sourceExpression: 'Fri 8pm - 11pm',
+        ...confirmedByVenue,
+      },
+      {
+        // A second night, so the pilot market has something on its own
+        // weekend. Every Dubai fixture ran on a Friday, which was right when
+        // the canonical query was "Friday night" and wrong once the weekend
+        // became market configuration: the UAE weekend is Saturday and Sunday,
+        // so "this weekend" in Dubai matched nothing at all.
+        weekday: WEEKDAY.saturday,
+        startTime: '21:00',
+        durationMinutes: 150,
+        title: 'Saturday Jazz Trio (fictional)',
+        genreTags: ['jazz'],
+        performanceType: 'live_band',
+        artist: 'The Test Trio',
+        sourceExpression: 'Sat 9pm - 11:30pm',
         ...confirmedByVenue,
       },
     ],

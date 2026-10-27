@@ -18,9 +18,11 @@
 import postgres from 'postgres';
 
 import { currency, format, formatBand, money } from '../src/lib/money.ts';
-import { fixedClock, localDate, localTime, nextWeekdayOnOrAfter, systemClock } from '../src/lib/time.ts';
+import { fixedClock, localDate, nextWeekdayOnOrAfter, systemClock } from '../src/lib/time.ts';
 import { confidenceLabel } from '../src/modules/evidence/confidence.ts';
-import { evaluateCandidate } from '../src/modules/search/eligibility.ts';
+import { evaluateAcrossDays } from '../src/modules/search/eligibility.ts';
+import { resolveWhen } from '../src/modules/search/when.ts';
+import { loadTimeBands } from '../src/modules/taxonomy/queries.ts';
 import { assembleResponse } from '../src/modules/search/ranking.ts';
 import { findCandidates, loadMarketBySlug } from '../src/modules/search/repository.ts';
 import type { ConstraintOutcome, SearchRequest, SearchResult } from '../src/modules/search/types.ts';
@@ -92,20 +94,24 @@ function printResult(result: SearchResult, locale: string, currencyCode: string,
     `       score ${result.score.toFixed(3)}   information ${(result.informationCompleteness * 100).toFixed(0)}% complete`,
   );
 
-  if (c.occurrence) {
-    const t = c.occurrence.time;
+  const occurrence = result.occurrence;
+  if (occurrence) {
+    const t = occurrence.time;
     const label = confidenceLabel(
       'published',
-      c.occurrence.evidenceState,
-      c.occurrence.sourceAuthority ?? 'ai_extracted',
+      occurrence.evidenceState,
+      occurrence.sourceAuthority ?? 'ai_extracted',
     );
     const crosses = t.localEndDate !== t.localStartDate ? ' (+1 day)' : '';
     console.log(
-      `       ${c.occurrence.title} — ${t.localStartDate} ${t.localStartTime}-${t.localEndTime}${crosses} ${t.timezone}`,
+      `       ${occurrence.title} — ${t.localStartDate} ${t.localStartTime}-${t.localEndTime}${crosses} ${t.timezone}`,
     );
     console.log(
       `       evidence: ${label}${t.sourceExpression ? `, source said "${t.sourceExpression}"` : ''}`,
     );
+  }
+  if (result.otherMatchingDates.length > 0) {
+    console.log(`       also on: ${result.otherMatchingDates.join(', ')}`);
   }
 
   if (c.price) {
@@ -133,7 +139,6 @@ async function runScenario(marketSlug: string, label: string) {
 
   // Everything market-specific comes from the record. Nothing below mentions a
   // currency, timezone or locale by name (ADR-009).
-  const friday = nextWeekdayOnOrAfter(5, clock, market.timezone);
   const ceilingMinor = market.currency === 'AED' ? 30000 : 150000;
 
   const request: SearchRequest = {
@@ -141,9 +146,18 @@ async function runScenario(marketSlug: string, label: string) {
     timezone: market.timezone,
     currency: currency(market.currency),
     locale: market.defaultLocale,
-    date: localDate(friday),
-    fromTime: localTime('19:00'),
-    toTime: localTime('23:00'),
+    // The weekend as this market defines it, which is not the same days in
+    // both pilot markets. Resolved rather than assumed (ADR-009).
+    when: resolveWhen({
+      // A week, so the demo exercises the multi-day window and the best-day
+      // choice rather than a single night. How "this weekend" differs between
+      // the two markets is shown separately below.
+      when: { kind: 'relative', phrase: { name: 'next_days', days: 7 } },
+      bands: await loadTimeBands(sql, market.id),
+      timezone: market.timezone,
+      weekendDays: market.weekendDays,
+      clock,
+    }),
     partySize: 4,
     budgetCeilingMinor: ceilingMinor,
     budgetBasis: 'per_person',
@@ -164,7 +178,7 @@ async function runScenario(marketSlug: string, label: string) {
     `market ${market.slug} | ${market.timezone} | ${market.currency} | ${market.defaultLocale}`,
   );
   console.log(
-    `query: ${request.date} ${request.fromTime}-${request.toTime}, party of ${request.partySize}, live music required,`,
+    `query: ${request.when.days[0]} -> ${request.when.days.at(-1)} (${request.when.days.length} days) ${request.when.fromTime}-${request.when.toTime}, party of ${request.partySize}, live music required,`,
   );
   console.log(
     `       ceiling ${format(money(ceilingMinor, currency(market.currency)), market.defaultLocale)} per person, prefers jazz or arabic`,
@@ -173,7 +187,7 @@ async function runScenario(marketSlug: string, label: string) {
   const candidates = await findCandidates(sql, request, clock);
   const evaluated = candidates.map((candidate) => ({
     candidate,
-    ...evaluateCandidate(candidate, request, clock),
+    days: evaluateAcrossDays(candidate, request, clock),
   }));
   const response = assembleResponse(evaluated, request);
 
@@ -226,6 +240,27 @@ try {
     'SECOND MARKET — identical code, no changes (doc 16 scenario 3)',
   );
 
+  // Same phrase, same code, different days. This is doc 10's acceptance gate
+  // in four lines: a second market needs configuration, not a core-code fork.
+  console.log(`
+${'='.repeat(78)}`);
+  console.log('ONE PHRASE, TWO MARKETS — "this weekend"');
+  console.log(`${'='.repeat(78)}`);
+  for (const slug of ['dubai', 'cairo']) {
+    const m = await loadMarketBySlug(sql, slug);
+    if (!m) continue;
+    const resolved = resolveWhen({
+      when: { kind: 'relative', phrase: { name: 'this_weekend' } },
+      bands: await loadTimeBands(sql, m.id),
+      timezone: m.timezone,
+      weekendDays: m.weekendDays,
+      clock,
+    });
+    console.log(
+      `  ${m.slug.padEnd(6)} weekend days ${JSON.stringify(m.weekendDays)} -> ${resolved.days.join(', ')} (${resolved.fromTime}-${resolved.toTime} ${m.timezone})`,
+    );
+  }
+
   // The zero-result path, which must explain itself rather than invent matches.
   const market = await loadMarketBySlug(sql, 'dubai');
   if (market) {
@@ -234,9 +269,16 @@ try {
       timezone: market.timezone,
       currency: currency(market.currency),
       locale: market.defaultLocale,
-      date: localDate(nextWeekdayOnOrAfter(2, clock, market.timezone)), // a Tuesday
-      fromTime: localTime('19:00'),
-      toTime: localTime('23:00'),
+      when: resolveWhen({
+        when: {
+          kind: 'date',
+          date: localDate(nextWeekdayOnOrAfter(2, clock, market.timezone)), // a Tuesday
+        },
+        bands: await loadTimeBands(sql, market.id),
+        timezone: market.timezone,
+        weekendDays: market.weekendDays,
+        clock,
+      }),
       budgetCeilingMinor: 5000,
       budgetBasis: 'per_person',
       hardConstraints: {
@@ -259,7 +301,7 @@ try {
     const candidates = await findCandidates(sql, request, clock);
     const evaluated = candidates.map((candidate) => ({
       candidate,
-      ...evaluateCandidate(candidate, request, clock),
+      days: evaluateAcrossDays(candidate, request, clock),
     }));
     const response = assembleResponse(evaluated, request);
 

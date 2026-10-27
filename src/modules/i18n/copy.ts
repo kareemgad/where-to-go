@@ -103,6 +103,11 @@ interface Dictionary {
   readonly informationComplete: string;
   readonly notVerified: string;
   readonly crossesMidnight: string;
+  readonly alsoOn: string;
+  readonly whenLabel: string;
+  readonly bandLabel: string;
+  readonly bands: Readonly<Record<string, string>>;
+  readonly whenOptions: Readonly<Record<string, string>>;
   readonly confirmedForThisDate: string;
   readonly noConfirmedPerformance: string;
   readonly availableHere: string;
@@ -168,6 +173,23 @@ const EN: Dictionary = {
   informationComplete: 'information complete',
   notVerified: 'Not verified',
   crossesMidnight: 'runs past midnight',
+  alsoOn: 'Also on',
+  whenLabel: 'When',
+  bandLabel: 'Time of day',
+  bands: {
+    brunch: 'Brunch',
+    afternoon: 'Afternoon',
+    evening: 'Evening',
+    late_night: 'Late night',
+  },
+  whenOptions: {
+    tonight: 'Tonight',
+    tomorrow: 'Tomorrow',
+    weekend: 'This weekend',
+    next3: 'Next 3 days',
+    next7: 'Next 7 days',
+    next14: 'Next 14 days',
+  },
   confirmedForThisDate: 'confirmed for this date',
   noConfirmedPerformance: 'no confirmed performance in this window',
   availableHere: 'confirmed here',
@@ -250,6 +272,23 @@ const AR: Dictionary = {
   informationComplete: 'من المعلومات متوفرة',
   notVerified: 'غير مؤكد',
   crossesMidnight: 'يمتد بعد منتصف الليل',
+  alsoOn: 'أيضًا في',
+  whenLabel: 'متى',
+  bandLabel: 'وقت اليوم',
+  bands: {
+    brunch: 'برانش',
+    afternoon: 'بعد الظهر',
+    evening: 'المساء',
+    late_night: 'وقت متأخر',
+  },
+  whenOptions: {
+    tonight: 'الليلة',
+    tomorrow: 'غدًا',
+    weekend: 'نهاية الأسبوع',
+    next3: 'خلال ٣ أيام',
+    next7: 'خلال ٧ أيام',
+    next14: 'خلال ١٤ يومًا',
+  },
   confirmedForThisDate: 'مؤكد في هذا التاريخ',
   noConfirmedPerformance: 'لا يوجد عرض مؤكد في هذا الوقت',
   availableHere: 'مؤكد هنا',

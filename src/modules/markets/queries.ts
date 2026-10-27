@@ -15,6 +15,12 @@ export interface MarketRecord {
   readonly timezone: string;
   readonly currency: string;
   readonly defaultLocale: string;
+  /**
+   * ISO weekday numbers this market treats as the weekend, Monday 1 through
+   * Sunday 7. Read by the when-window resolver, never assumed: Saturday and
+   * Sunday in one market, Friday and Saturday in another.
+   */
+  readonly weekendDays: readonly number[];
 }
 
 const SELECT = `
@@ -23,7 +29,8 @@ const SELECT = `
   reference_name  as "referenceName",
   timezone,
   currency,
-  default_locale  as "defaultLocale"
+  default_locale  as "defaultLocale",
+  weekend_days    as "weekendDays"
 `;
 
 export async function loadMarketBySlug(sql: Sql, slug: string): Promise<MarketRecord | null> {

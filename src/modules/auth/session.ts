@@ -60,7 +60,8 @@ export async function reviewableMarkets(sql: Sql, userId: string): Promise<Marke
       m.reference_name  as "referenceName",
       m.timezone,
       m.currency,
-      m.default_locale  as "defaultLocale"
+      m.default_locale  as "defaultLocale",
+      m.weekend_days    as "weekendDays"
     from markets m
     where m.id in (select app_user_reviewable_markets(${userId}::uuid))
       and m.status = 'live'

@@ -8,7 +8,8 @@
 
 import type { CurrencyCode, PriceBand, PriceBasis } from '@/lib/money';
 import type { EvidenceState, SourceAuthority } from '@/modules/evidence/confidence';
-import type { LocalDate, LocalTime, OccurrenceTime } from '@/lib/time';
+import type { LocalDate, OccurrenceTime } from '@/lib/time';
+import type { ResolvedWhen } from './when';
 
 /** A constraint the user requires, as opposed to a preference they'd like. */
 export interface HardConstraints {
@@ -38,10 +39,14 @@ export interface SearchRequest {
   /** BCP 47, from market_locales. */
   readonly locale: string;
 
-  readonly date: LocalDate;
-  readonly fromTime: LocalTime;
-  readonly toTime: LocalTime;
+  /**
+   * Already resolved into days and a clock window. The request carries the
+   * answer rather than the question, so eligibility needs neither a clock nor
+   * the market's band table to decide what "this weekend" meant.
+   */
+  readonly when: ResolvedWhen;
 
+  /** Optional. Absent means group fit is not scored, not that the party is 4. */
   readonly partySize?: number;
   /**
    * Budget ceiling in the market's own currency. Never a converted figure: FX
@@ -137,8 +142,12 @@ export interface Candidate {
   /** Experience tags asserted about the venue, each with its own evidence. */
   readonly tags: readonly CandidateTag[];
   readonly price: { readonly band: PriceBand; readonly evidenceState: EvidenceState } | null;
-  /** Null when the venue has no recommendable occurrence in the window. */
-  readonly occurrence: CandidateOccurrence | null;
+  /**
+   * Every recommendable occurrence anywhere in the searched window, not one.
+   * A venue is evaluated per day and returned on its best one, which it cannot
+   * be if the repository has already picked a day on its behalf.
+   */
+  readonly occurrences: readonly CandidateOccurrence[];
 }
 
 /**
@@ -192,10 +201,28 @@ export interface ScoreComponent {
   readonly contribution: number;
 }
 
+/** One candidate judged against one day of the window. */
+export interface DayEvaluation {
+  readonly date: LocalDate;
+  readonly verdict: Verdict;
+  readonly outcomes: readonly ConstraintOutcome[];
+  /** The occurrence that satisfied the day, when one did. */
+  readonly occurrence: CandidateOccurrence | null;
+}
+
 export interface SearchResult {
   readonly candidate: Candidate;
   readonly verdict: Verdict;
   readonly outcomes: readonly ConstraintOutcome[];
+  /** The day this verdict belongs to: a venue is returned once, on its best. */
+  readonly matchedDate: LocalDate;
+  /** The occurrence on the matched day, when the match rests on one. */
+  readonly occurrence: CandidateOccurrence | null;
+  /**
+   * Other days in the window reaching the same verdict, ascending. Listed so a
+   * venue that works on four nights does not look like it works on one.
+   */
+  readonly otherMatchingDates: readonly LocalDate[];
   readonly score: number;
   readonly components: readonly ScoreComponent[];
   /**
@@ -214,6 +241,12 @@ export interface SearchResponse {
   /** Why a zero-result search returned nothing, and what would change it. */
   readonly relaxations: readonly Relaxation[];
   readonly rankingVersion: string;
+  /**
+   * Set when the requested window was wider than the cap, carrying the number
+   * of days asked for. A search that quietly answers a narrower question than
+   * the one asked is worse than one that says so.
+   */
+  readonly truncatedFromDays: number | null;
 }
 
 export interface Relaxation {

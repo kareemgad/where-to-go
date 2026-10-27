@@ -347,3 +347,23 @@ export function nextWeekdayOnOrAfter(
   const delta = (weekday - today.weekday + 7) % 7;
   return localDate(today.plus({ days: delta }).toFormat('yyyy-MM-dd'));
 }
+
+/**
+ * One local date, written the way the requested locale writes dates.
+ *
+ * Used for the "also on" list beside a result. The zone is accepted so a date
+ * is never reformatted through the server's own zone, which near midnight
+ * would name the wrong day.
+ */
+export function formatLocalDay(date: string, timezone: string, locale: string): string {
+  const zone = timezone === '' ? 'utc' : timezone;
+  const value = DateTime.fromISO(date, { zone });
+  if (!value.isValid) {
+    throw new InvalidTimeError(`"${date}" is not a local date in ${timezone}.`);
+  }
+  return value.setLocale(locale).toLocaleString({
+    weekday: 'short',
+    day: 'numeric',
+    month: 'short',
+  });
+}

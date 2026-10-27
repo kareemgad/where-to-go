@@ -22,10 +22,13 @@ import { satisfiesHardConstraint } from '@/modules/evidence/confidence';
 import type { Attributed } from './types';
 import type {
   Candidate,
+  CandidateOccurrence,
   ConstraintOutcome,
+  DayEvaluation,
   SearchRequest,
   Verdict,
 } from './types';
+import type { LocalDate } from '@/lib/time';
 
 /**
  * Evaluate one boolean published attribute against a requirement.
@@ -56,36 +59,65 @@ function evaluateBoolean(
   };
 }
 
-export function evaluateCandidate(
+/**
+ * The first recommendable occurrence overlapping one day's window.
+ *
+ * Picked here rather than in SQL because the window rule — overlap not
+ * containment, late-night ranges rolling into the next day — already lives in
+ * lib/time, and a second copy of it in a query would be a second chance to
+ * disagree about what "Friday 22:00 to 02:00" means.
+ */
+function occurrenceOnDay(
   candidate: Candidate,
   request: SearchRequest,
+  date: LocalDate,
   clock: Clock,
-): { verdict: Verdict; outcomes: ConstraintOutcome[] } {
+): CandidateOccurrence | null {
+  const window = searchWindow({
+    date,
+    fromTime: request.when.fromTime,
+    toTime: request.when.toTime,
+    timezone: request.timezone,
+  });
+
+  const usable = candidate.occurrences
+    .filter(
+      (o) =>
+        satisfiesHardConstraint(o.evidenceState) &&
+        !hasEnded(o.time, clock) &&
+        overlapsWindow(o.time, window),
+    )
+    .sort((a, b) => a.time.startsAt.getTime() - b.time.startsAt.getTime());
+
+  return usable[0] ?? null;
+}
+
+/**
+ * Judge one candidate against one day of the window.
+ *
+ * Everything except the live-music constraint is a property of the venue and
+ * does not vary by day, but it is re-evaluated per day anyway: a result
+ * carries the outcomes that justify it, and outcomes computed against a
+ * different day than the one shown would be an explanation of something else.
+ */
+export function evaluateCandidateOnDay(
+  candidate: Candidate,
+  request: SearchRequest,
+  date: LocalDate,
+  clock: Clock,
+): DayEvaluation {
   const outcomes: ConstraintOutcome[] = [];
+  const occurrence = occurrenceOnDay(candidate, request, date, clock);
 
   // --- live music on this date, in this window -----------------------------
   if (request.hardConstraints.liveMusic) {
-    const occurrence = candidate.occurrence;
-    const window = searchWindow({
-      date: request.date,
-      fromTime: request.fromTime,
-      toTime: request.toTime,
-      timezone: request.timezone,
-    });
-
     // Doc 02 AC01 and AC02 together: a venue with no confirmed performance on
-    // the chosen date is excluded, and a past occurrence is never upcoming.
-    // The repository only returns recommendable occurrences, so a null here
-    // means the venue failed the confirmed-plus-evidence gate — including the
-    // scheduled-but-unconfirmed case ADR-010 exists to exclude.
-    const usable =
-      occurrence !== null &&
-      satisfiesHardConstraint(occurrence.evidenceState) &&
-      !hasEnded(occurrence.time, clock) &&
-      overlapsWindow(occurrence.time, window);
-
+    // this date is excluded, and a past occurrence is never upcoming. The
+    // repository only returns recommendable occurrences, so an empty result
+    // here means the venue failed the confirmed-plus-evidence gate — including
+    // the scheduled-but-unconfirmed case ADR-010 exists to exclude.
     outcomes.push(
-      usable && occurrence
+      occurrence
         ? {
             constraint: 'live_music',
             outcome: 'pass',
@@ -213,5 +245,20 @@ export function evaluateCandidate(
       ? 'needs_confirmation'
       : 'eligible';
 
-  return { verdict, outcomes };
+  return { date, verdict, outcomes, occurrence };
+}
+
+/**
+ * Judge a candidate against every day of the window.
+ *
+ * One evaluation per day, and the caller decides which day to show. Returning
+ * the best day from here would mean deciding "best" without the score, and
+ * ordering is ranking's job, not eligibility's.
+ */
+export function evaluateAcrossDays(
+  candidate: Candidate,
+  request: SearchRequest,
+  clock: Clock,
+): DayEvaluation[] {
+  return request.when.days.map((date) => evaluateCandidateOnDay(candidate, request, date, clock));
 }

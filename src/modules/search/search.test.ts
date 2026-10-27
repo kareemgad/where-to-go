@@ -3,17 +3,26 @@ import { describe, expect, it } from 'vitest';
 import { currency, priceBand } from '@/lib/money';
 import { fixedClock, localDate, localTime, occurrenceFromLocal } from '@/lib/time';
 import type { EvidenceState, SourceAuthority } from '@/modules/evidence/confidence';
-import { evaluateCandidate } from './eligibility';
-import { RANKING_VERSION, assembleResponse, scoreCandidate } from './ranking';
+import { evaluateCandidateOnDay } from './eligibility';
+import {
+  RANKING_VERSION,
+  assembleResponse as assembleDays,
+  scoreCandidate as scoreOnDay,
+} from './ranking';
 import type {
   Attributed,
   Candidate,
   CandidateExperience,
+  CandidateOccurrence,
   CandidatePolicies,
+  DayEvaluation,
   NoiseBand,
   SearchRequest,
+  SearchResponse,
   Verdict,
 } from './types';
+import { MAX_WINDOW_DAYS, resolveWhen } from './when';
+import type { TimeBandHours } from './when';
 
 /**
  * The acceptance table from doc 07 and the brief's vertical-slice section,
@@ -106,7 +115,19 @@ function priceOf(low: number, high: number, evidenceState: EvidenceState = 'sour
   };
 }
 
-function candidate(overrides: Partial<Candidate> & Pick<Candidate, 'venueSlug'>): Candidate {
+/**
+ * A candidate.
+ *
+ * `occurrence` is a convenience for the common single-night fixture; a venue
+ * with a programme across several nights passes `occurrences` instead. Both
+ * end up in the same array, because the engine evaluates per day and the
+ * repository no longer picks a night on the venue's behalf.
+ */
+function candidate(
+  overrides: Partial<Candidate> &
+    Pick<Candidate, 'venueSlug'> & { occurrence?: CandidateOccurrence | null },
+): Candidate {
+  const { occurrence, ...rest } = overrides;
   return {
     venueId: `id-${overrides.venueSlug}`,
     displayName: overrides.venueSlug,
@@ -119,9 +140,64 @@ function candidate(overrides: Partial<Candidate> & Pick<Candidate, 'venueSlug'>)
     kinds: [],
     tags: [],
     price: null,
-    occurrence: null,
-    ...overrides,
+    occurrences: occurrence ? [occurrence] : [],
+    ...rest,
   };
+}
+
+/** The global default band hours, as migration 0024 seeds them. */
+const BANDS: TimeBandHours[] = [
+  { key: 'brunch', startsLocal: '10:00', endsLocal: '14:00' },
+  { key: 'afternoon', startsLocal: '14:00', endsLocal: '17:00' },
+  { key: 'evening', startsLocal: '19:00', endsLocal: '23:00' },
+  { key: 'late_night', startsLocal: '22:00', endsLocal: '03:00' },
+];
+
+/** Dubai's weekend. Cairo's is Friday and Saturday; neither is assumed. */
+const WEEKEND_SAT_SUN = [6, 7];
+const WEEKEND_FRI_SAT = [5, 6];
+
+/**
+ * Evaluate against the request's first day.
+ *
+ * Most assertions here are about one night, and reading a day out of the
+ * window at each call site would bury what they are actually testing.
+ */
+function evaluateCandidate(
+  c: Candidate,
+  r: SearchRequest,
+  clock: typeof CLOCK,
+): DayEvaluation {
+  const day = r.when.days[0];
+  if (!day) throw new Error('the request has no days');
+  return evaluateCandidateOnDay(c, r, day, clock);
+}
+
+/** Score against the candidate's first occurrence, if it has one. */
+function scoreCandidate(c: Candidate, r: SearchRequest) {
+  return scoreOnDay(c, c.occurrences[0] ?? null, r);
+}
+
+/** Assemble from single-day evaluations, as most of these fixtures are. */
+function assembleResponse(
+  evaluated: readonly { candidate: Candidate; date?: string; verdict: Verdict; outcomes: DayEvaluation['outcomes']; occurrence: CandidateOccurrence | null }[],
+  r: SearchRequest,
+  shortlistSize?: number,
+): SearchResponse {
+  const entries = evaluated.map((e) => ({
+    candidate: e.candidate,
+    days: [
+      {
+        date: localDate(e.date ?? FRIDAY),
+        verdict: e.verdict,
+        outcomes: e.outcomes,
+        occurrence: e.occurrence,
+      },
+    ],
+  }));
+  return shortlistSize === undefined
+    ? assembleDays(entries, r, undefined)
+    : assembleDays(entries, r, shortlistSize);
 }
 
 /** Friday 19:00-23:00, four adults, live music, AED 300 ceiling. */
@@ -131,9 +207,13 @@ function baseRequest(overrides: Partial<SearchRequest> = {}): SearchRequest {
     timezone: TZ,
     currency: AED,
     locale: 'en-AE',
-    date: localDate(FRIDAY),
-    fromTime: localTime('19:00'),
-    toTime: localTime('23:00'),
+    when: {
+      days: [localDate(FRIDAY)],
+      fromTime: localTime('19:00'),
+      toTime: localTime('23:00'),
+      bandKey: 'evening',
+      truncatedFrom: null,
+    },
     partySize: 4,
     budgetCeilingMinor: 30000,
     budgetBasis: 'per_person',
@@ -578,4 +658,310 @@ describe('assembling the response', () => {
   });
 
   void build;
+});
+
+// ===========================================================================
+// the when-window
+// ===========================================================================
+
+/**
+ * Resolving when.
+ *
+ * Every assertion here passes the market's zone and weekend days in, because
+ * the point of the module is that it holds neither. A suite that only ever
+ * exercised one market would not notice the day a Dubai assumption was baked
+ * into shared logic, which is the failure ADR-009 exists to prevent.
+ */
+describe('resolveWhen', () => {
+  const DUBAI = 'Asia/Dubai';
+  const CAIRO = 'Africa/Cairo';
+  const LONDON = 'Europe/London';
+
+  const resolve = (
+    when: Parameters<typeof resolveWhen>[0]['when'],
+    options: {
+      timezone?: string;
+      weekendDays?: number[];
+      band?: string;
+      clock?: typeof CLOCK;
+    } = {},
+  ) =>
+    resolveWhen({
+      when,
+      bands: BANDS,
+      timezone: options.timezone ?? DUBAI,
+      weekendDays: options.weekendDays ?? WEEKEND_SAT_SUN,
+      clock: options.clock ?? CLOCK,
+      ...(options.band !== undefined ? { band: options.band } : {}),
+    });
+
+  it('resolves an exact date to that one day', () => {
+    const resolved = resolve({ kind: 'date', date: localDate(FRIDAY) });
+    expect(resolved.days).toEqual([FRIDAY]);
+    expect(resolved.truncatedFrom).toBeNull();
+  });
+
+  it('defaults to the market evening', () => {
+    const resolved = resolve({ kind: 'date', date: localDate(FRIDAY) });
+    expect(resolved.bandKey).toBe('evening');
+    expect(resolved.fromTime).toBe('19:00');
+    expect(resolved.toTime).toBe('23:00');
+  });
+
+  it('honours an explicit band, including one crossing midnight', () => {
+    const resolved = resolve({ kind: 'date', date: localDate(FRIDAY) }, { band: 'late_night' });
+    expect(resolved.fromTime).toBe('22:00');
+    // Earlier than the start: late night means tonight into tomorrow.
+    expect(resolved.toTime).toBe('03:00');
+  });
+
+  it('falls back to evening rather than failing on an unknown band', () => {
+    const resolved = resolve({ kind: 'date', date: localDate(FRIDAY) }, { band: 'nonsense' });
+    expect(resolved.bandKey).toBe('evening');
+  });
+
+  it('resolves tonight in the market zone, not the system zone', () => {
+    // 22:00 UTC is already the next day in Dubai (UTC+4) and not yet in
+    // London. A resolver reading the server clock would hand one of the two
+    // markets yesterday's shortlist.
+    const lateClock = fixedClock('2026-11-13T22:00:00Z');
+    expect(
+      resolve(
+        { kind: 'relative', phrase: { name: 'tonight' } },
+        { timezone: DUBAI, clock: lateClock },
+      ).days,
+    ).toEqual(['2026-11-14']);
+    expect(
+      resolve(
+        { kind: 'relative', phrase: { name: 'tonight' } },
+        { timezone: LONDON, clock: lateClock },
+      ).days,
+    ).toEqual(['2026-11-13']);
+  });
+
+  it('resolves tomorrow one calendar day on', () => {
+    expect(resolve({ kind: 'relative', phrase: { name: 'tomorrow' } }).days).toEqual([
+      '2026-11-14',
+    ]);
+  });
+
+  // The second-market test that matters most: the weekend is not the same
+  // days in both pilot markets, and resolving it to Saturday and Sunday in
+  // shared logic would be wrong in Cairo every single week.
+  it('resolves this weekend to the days the market calls the weekend', () => {
+    // CLOCK is midday on Friday 13 November 2026.
+    const dubai = resolve(
+      { kind: 'relative', phrase: { name: 'this_weekend' } },
+      { timezone: DUBAI, weekendDays: WEEKEND_SAT_SUN },
+    );
+    const cairo = resolve(
+      { kind: 'relative', phrase: { name: 'this_weekend' } },
+      { timezone: CAIRO, weekendDays: WEEKEND_FRI_SAT },
+    );
+
+    expect(dubai.days).toEqual(['2026-11-14', '2026-11-15']);
+    // Asked on a Friday, the Cairo weekend includes that same Friday.
+    expect(cairo.days).toEqual(['2026-11-13', '2026-11-14']);
+    expect(dubai.days).not.toEqual(cairo.days);
+  });
+
+  it('includes today when today is already a weekend day', () => {
+    const saturday = fixedClock('2026-11-14T12:00:00Z');
+    const resolved = resolve(
+      { kind: 'relative', phrase: { name: 'this_weekend' } },
+      { clock: saturday },
+    );
+    expect(resolved.days[0]).toBe('2026-11-14');
+  });
+
+  it('counts "next N days" inclusive of today', () => {
+    const resolved = resolve({ kind: 'relative', phrase: { name: 'next_days', days: 3 } });
+    expect(resolved.days).toEqual(['2026-11-13', '2026-11-14', '2026-11-15']);
+  });
+
+  it('rejects a nonsensical day count rather than guessing', () => {
+    expect(() => resolve({ kind: 'relative', phrase: { name: 'next_days', days: 0 } })).toThrow();
+    expect(() => resolve({ kind: 'relative', phrase: { name: 'next_days', days: 2.5 } })).toThrow();
+  });
+
+  it('resolves an explicit range inclusively', () => {
+    const resolved = resolve({
+      kind: 'range',
+      from: localDate('2026-11-13'),
+      to: localDate('2026-11-16'),
+    });
+    expect(resolved.days).toHaveLength(4);
+    expect(resolved.days.at(-1)).toBe('2026-11-16');
+  });
+
+  it('refuses a range that ends before it starts', () => {
+    expect(() =>
+      resolve({ kind: 'range', from: localDate('2026-11-16'), to: localDate('2026-11-13') }),
+    ).toThrow();
+  });
+
+  describe('the fourteen-day cap', () => {
+    it('truncates a longer run and says how long was asked for', () => {
+      const resolved = resolve({ kind: 'relative', phrase: { name: 'next_days', days: 30 } });
+      expect(resolved.days).toHaveLength(MAX_WINDOW_DAYS);
+      // The number asked for, not the number returned: a search that quietly
+      // answers a narrower question is worse than one that says so.
+      expect(resolved.truncatedFrom).toBe(30);
+    });
+
+    it('truncates a long explicit range the same way', () => {
+      const resolved = resolve({
+        kind: 'range',
+        from: localDate('2026-11-01'),
+        to: localDate('2026-11-30'),
+      });
+      expect(resolved.days).toHaveLength(MAX_WINDOW_DAYS);
+      expect(resolved.truncatedFrom).toBe(30);
+      expect(resolved.days.at(-1)).toBe('2026-11-14');
+    });
+
+    it('reports nothing when the window is exactly at the cap', () => {
+      const resolved = resolve({
+        kind: 'relative',
+        phrase: { name: 'next_days', days: MAX_WINDOW_DAYS },
+      });
+      expect(resolved.days).toHaveLength(MAX_WINDOW_DAYS);
+      expect(resolved.truncatedFrom).toBeNull();
+    });
+  });
+
+  describe('daylight saving', () => {
+    // Days are added as calendar days in the market zone. Adding 86,400,000
+    // milliseconds instead would drop or repeat a date on the two transitions
+    // a year, which is a wrong shortlist on exactly two nights.
+    it('spans a spring-forward transition without skipping a date', () => {
+      // British Summer Time begins on 29 March 2026.
+      const resolved = resolve(
+        { kind: 'range', from: localDate('2026-03-27'), to: localDate('2026-03-31') },
+        { timezone: LONDON },
+      );
+      expect(resolved.days).toEqual([
+        '2026-03-27',
+        '2026-03-28',
+        '2026-03-29',
+        '2026-03-30',
+        '2026-03-31',
+      ]);
+    });
+
+    it('spans an autumn transition without repeating a date', () => {
+      const resolved = resolve(
+        { kind: 'range', from: localDate('2026-10-23'), to: localDate('2026-10-27') },
+        { timezone: LONDON },
+      );
+      expect(resolved.days).toEqual([
+        '2026-10-23',
+        '2026-10-24',
+        '2026-10-25',
+        '2026-10-26',
+        '2026-10-27',
+      ]);
+      expect(new Set(resolved.days).size).toBe(resolved.days.length);
+    });
+
+    it('keeps dates distinct and ascending across a Cairo transition', () => {
+      // Egypt observes DST again from 2023. The exact rule is the zone
+      // database's business; what this asserts is the property that has to
+      // hold whatever the rule turns out to be.
+      const resolved = resolve(
+        { kind: 'relative', phrase: { name: 'next_days', days: 14 } },
+        { timezone: CAIRO, clock: fixedClock('2026-10-24T09:00:00Z') },
+      );
+      expect(resolved.days).toHaveLength(14);
+      expect(new Set(resolved.days).size).toBe(14);
+      expect([...resolved.days].sort()).toEqual([...resolved.days]);
+    });
+  });
+});
+
+describe('per-day eligibility across a window', () => {
+  const window = (days: string[], from = '19:00', to = '23:00') => ({
+    days: days.map(localDate),
+    fromTime: localTime(from),
+    toTime: localTime(to),
+    bandKey: 'evening',
+    truncatedFrom: null,
+  });
+
+  const SAT = '2026-11-14';
+  const SUN = '2026-11-15';
+
+  it('returns a venue once, on its best day, listing the others', () => {
+    const c = candidate({
+      venueSlug: 'three-nights',
+      occurrences: [
+        occurrence('20:00', 180, ['rock'], { date: FRIDAY }),
+        occurrence('20:00', 180, ['jazz'], { date: SAT }),
+        occurrence('20:00', 180, ['rock'], { date: SUN }),
+      ],
+      price: priceOf(10000, 20000),
+    });
+    const request = baseRequest({ when: window([FRIDAY, SAT, SUN]) });
+
+    const days = request.when.days.map((d) => evaluateCandidateOnDay(c, request, d, CLOCK));
+    const response = assembleDays([{ candidate: c, days }], request);
+
+    expect(response.eligible).toHaveLength(1);
+    const result = response.eligible[0]!;
+    // Saturday is the jazz night, and jazz is what the request asked for.
+    expect(result.matchedDate).toBe(SAT);
+    expect(result.otherMatchingDates).toEqual([FRIDAY, SUN]);
+    expect(result.occurrence?.genreTags).toContain('jazz');
+  });
+
+  it('prefers an eligible day over one that only needs confirmation', () => {
+    const c = candidate({
+      venueSlug: 'one-good-night',
+      occurrences: [occurrence('20:00', 180, ['jazz'], { date: SAT })],
+      price: priceOf(10000, 20000),
+    });
+    const request = baseRequest({ when: window([FRIDAY, SAT]) });
+
+    const days = request.when.days.map((d) => evaluateCandidateOnDay(c, request, d, CLOCK));
+    const response = assembleDays([{ candidate: c, days }], request);
+
+    expect(response.eligible).toHaveLength(1);
+    expect(response.eligible[0]!.matchedDate).toBe(SAT);
+    // Friday had no performance, so it is not offered as an alternative.
+    expect(response.eligible[0]!.otherMatchingDates).toEqual([]);
+  });
+
+  it('excludes a venue with no performance anywhere in the window', () => {
+    const c = candidate({ venueSlug: 'nothing-on', price: priceOf(10000, 20000) });
+    const request = baseRequest({ when: window([FRIDAY, SAT, SUN]) });
+
+    const days = request.when.days.map((d) => evaluateCandidateOnDay(c, request, d, CLOCK));
+    const response = assembleDays([{ candidate: c, days }], request);
+
+    expect(response.eligible).toHaveLength(0);
+    expect(response.excluded).toHaveLength(1);
+    // Still reported against a specific day, so the explanation is about
+    // something rather than about nothing.
+    expect(response.excluded[0]!.matchedDate).toBe(FRIDAY);
+  });
+
+  it('matches a set starting after midnight against a late-night window', () => {
+    const c = candidate({
+      venueSlug: 'after-midnight',
+      // 00:30 on the Saturday belongs to the Friday late-night window.
+      occurrences: [occurrence('00:30', 120, ['jazz'], { date: SAT })],
+      price: priceOf(10000, 20000),
+    });
+    const request = baseRequest({ when: window([FRIDAY], '22:00', '03:00') });
+
+    const days = request.when.days.map((d) => evaluateCandidateOnDay(c, request, d, CLOCK));
+    expect(days[0]!.verdict).toBe('eligible');
+    expect(days[0]!.occurrence).not.toBeNull();
+  });
+
+  it('carries the truncation notice onto the response', () => {
+    const request = baseRequest({ when: { ...window([FRIDAY]), truncatedFrom: 30 } });
+    const response = assembleDays([], request);
+    expect(response.truncatedFromDays).toBe(30);
+  });
 });

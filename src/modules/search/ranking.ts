@@ -25,8 +25,9 @@ import { evidenceWeight } from '@/modules/evidence/confidence';
 import type { EvidenceState } from '@/modules/evidence/confidence';
 import type {
   Candidate,
+  CandidateOccurrence,
   ConstraintKey,
-  ConstraintOutcome,
+  DayEvaluation,
   Relaxation,
   ScoreComponent,
   SearchRequest,
@@ -61,11 +62,13 @@ function closeness(actual: number, preferred: number): number {
   return clamp01(1 - Math.abs(actual - preferred) / 4);
 }
 
-function scoreMusic(candidate: Candidate, request: SearchRequest): Scored | null {
+function scoreMusic(
+  occurrence: CandidateOccurrence | null,
+  request: SearchRequest,
+): Scored | null {
   const wanted = request.softPreferences.genres;
   if (wanted.length === 0) return null; // no preference stated
 
-  const occurrence = candidate.occurrence;
   if (occurrence === null) return { key: 'music', normalised: 0 };
 
   const tags = new Set(occurrence.genreTags.map((t) => t.toLowerCase()));
@@ -138,12 +141,12 @@ function scoreSeatingAccess(candidate: Candidate, request: SearchRequest): Score
   return { key: 'seating_access', normalised: parts.reduce((a, b) => a + b, 0) / parts.length };
 }
 
-function scoreFreshness(candidate: Candidate): Scored {
+function scoreFreshness(candidate: Candidate, occurrence: CandidateOccurrence | null): Scored {
   // Doc 03 step 4: penalise stale or unverified evidence. Always applicable,
   // because freshness is a property of what we hold rather than of what the
   // user asked for.
   const states: EvidenceState[] = [];
-  if (candidate.occurrence) states.push(candidate.occurrence.evidenceState);
+  if (occurrence) states.push(occurrence.evidenceState);
   if (candidate.price) states.push(candidate.price.evidenceState);
   states.push(candidate.experience.conversationFriendliness.evidenceState);
 
@@ -154,17 +157,25 @@ function scoreFreshness(candidate: Candidate): Scored {
   };
 }
 
+/**
+ * Score one candidate as it stands on one day.
+ *
+ * The occurrence is passed in rather than read from the candidate, because a
+ * venue in a fourteen-day window has as many occurrences as it has nights and
+ * the score belongs to the night being offered.
+ */
 export function scoreCandidate(
   candidate: Candidate,
+  occurrence: CandidateOccurrence | null,
   request: SearchRequest,
 ): { score: number; components: ScoreComponent[]; informationCompleteness: number } {
   const scored: Scored[] = [
-    scoreMusic(candidate, request),
+    scoreMusic(occurrence, request),
     scoreAtmosphere(candidate, request),
     scoreBudget(candidate, request),
     scoreDistance(candidate, request),
     scoreSeatingAccess(candidate, request),
-    scoreFreshness(candidate),
+    scoreFreshness(candidate, occurrence),
   ].filter((s): s is Scored => s !== null);
 
   const components: ScoreComponent[] = scored.map((s) => {
@@ -253,6 +264,64 @@ export function buildRelaxations(
   return relaxations.sort((a, b) => b.blockedCount - a.blockedCount);
 }
 
+/** Worse verdicts sort later. A venue is offered on the best day it has. */
+const VERDICT_RANK: Record<Verdict, number> = {
+  eligible: 0,
+  needs_confirmation: 1,
+  excluded: 2,
+};
+
+export interface CandidateDays {
+  readonly candidate: Candidate;
+  readonly days: readonly DayEvaluation[];
+}
+
+/**
+ * Collapse a candidate's per-day evaluations into the one result to show.
+ *
+ * Best verdict first, then highest score, then earliest date. Scoring before
+ * choosing is the point: with a fourteen-day window the first matching night
+ * is rarely the best one, and picking by date would quietly bury a strong
+ * Saturday behind a thin Tuesday.
+ *
+ * The other days reaching that same verdict are carried alongside, so a venue
+ * that works on four nights does not read as working on one.
+ */
+function bestDay(
+  entry: CandidateDays,
+  request: SearchRequest,
+): SearchResult | null {
+  if (entry.days.length === 0) return null;
+
+  const bestRank = Math.min(...entry.days.map((d) => VERDICT_RANK[d.verdict]));
+  const tier = entry.days.filter((d) => VERDICT_RANK[d.verdict] === bestRank);
+
+  const scoredTier = tier.map((day) => ({
+    day,
+    ...scoreCandidate(entry.candidate, day.occurrence, request),
+  }));
+
+  scoredTier.sort((a, b) => b.score - a.score || a.day.date.localeCompare(b.day.date));
+  const chosen = scoredTier[0];
+  if (!chosen) return null;
+
+  return {
+    candidate: entry.candidate,
+    verdict: chosen.day.verdict,
+    outcomes: chosen.day.outcomes,
+    matchedDate: chosen.day.date,
+    occurrence: chosen.day.occurrence,
+    otherMatchingDates: tier
+      .map((d) => d.date)
+      .filter((date) => date !== chosen.day.date)
+      .sort(),
+    score: chosen.score,
+    components: chosen.components,
+    informationCompleteness: chosen.informationCompleteness,
+    rankingVersion: RANKING_VERSION,
+  };
+}
+
 /**
  * Assemble the response: ranked within each verdict bucket, never across them.
  *
@@ -260,24 +329,17 @@ export function buildRelaxations(
  * are excluded from the three-to-five shortlist. Interleaving them by score
  * would make an unproven candidate outrank a proven one, which is precisely
  * the inflation of apparent coverage the brief warned about.
+ *
+ * Each venue appears exactly once, on its best day.
  */
 export function assembleResponse(
-  evaluated: readonly { candidate: Candidate; verdict: Verdict; outcomes: ConstraintOutcome[] }[],
+  evaluated: readonly CandidateDays[],
   request: SearchRequest,
   shortlistSize = 5,
 ): SearchResponse {
-  const scoredResults: SearchResult[] = evaluated.map((e) => {
-    const { score, components, informationCompleteness } = scoreCandidate(e.candidate, request);
-    return {
-      candidate: e.candidate,
-      verdict: e.verdict,
-      outcomes: e.outcomes,
-      score,
-      components,
-      informationCompleteness,
-      rankingVersion: RANKING_VERSION,
-    };
-  });
+  const scoredResults = evaluated
+    .map((entry) => bestDay(entry, request))
+    .filter((r): r is SearchResult => r !== null);
 
   const byScore = (a: SearchResult, b: SearchResult) =>
     b.score - a.score ||
@@ -296,5 +358,6 @@ export function assembleResponse(
     excluded,
     relaxations: eligible.length === 0 ? buildRelaxations(scoredResults, request) : [],
     rankingVersion: RANKING_VERSION,
+    truncatedFromDays: request.when.truncatedFrom,
   };
 }

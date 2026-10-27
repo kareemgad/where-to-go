@@ -181,10 +181,12 @@ try {
 
       const marketRow = pickOne(await tx`
         insert into markets (
-          slug, country_id, reference_name, timezone, currency, default_locale, priority
+          slug, country_id, reference_name, timezone, currency, default_locale,
+          weekend_days, priority
         ) values (
           ${market.slug}, ${countryId}, ${market.referenceName}, ${market.timezone},
-          ${market.currency}, ${market.defaultLocale}, ${market.priority}
+          ${market.currency}, ${market.defaultLocale},
+          ${market.weekendDays}::smallint[], ${market.priority}
         ) returning id
       `, 'marketRow');
       marketIds.set(market.slug, marketRow.id);

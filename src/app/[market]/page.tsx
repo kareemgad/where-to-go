@@ -5,6 +5,7 @@ import { db } from '@/db/client';
 import { systemClock, nextWeekdayOnOrAfter } from '@/lib/time';
 import { copyFor } from '@/modules/i18n/copy';
 import { loadMarketBySlug, marketDisplayName } from '@/modules/markets/queries';
+import { loadTimeBands } from '@/modules/taxonomy/queries';
 import { DemoBanner } from '@/app/_components/evidence';
 
 /**
@@ -28,6 +29,7 @@ export default async function MarketHome({
 
   const name = await marketDisplayName(sql, market);
   const copy = copyFor(market.defaultLocale);
+  const bands = await loadTimeBands(sql, market.id);
 
   // Default to the next Friday in the market's own zone, which is where the
   // product's core example starts. Resolved from the clock, not hardcoded.
@@ -59,45 +61,46 @@ export default async function MarketHome({
         <fieldset>
           <legend className="text-sm font-semibold text-neutral-900">{copy.findNight}</legend>
 
-          <div className="mt-3 grid grid-cols-2 gap-4 sm:grid-cols-4">
-            <label className="col-span-2">
-              <span className={labelClass}>{copy.date}</span>
-              <input type="date" name="date" defaultValue={defaultDate} className={field} required />
+          {/* One window rather than a date and two times. The clock hours
+              behind each band are market configuration, so this offers the
+              band by name and the market decides what it means (ADR-009). */}
+          <div className="mt-3 grid grid-cols-1 gap-4 sm:grid-cols-2">
+            <label>
+              <span className={labelClass}>{copy.whenLabel}</span>
+              <select name="when" defaultValue="weekend" className={field}>
+                {Object.entries(copy.whenOptions).map(([value, label]) => (
+                  <option key={value} value={value}>
+                    {label}
+                  </option>
+                ))}
+                <option value={defaultDate}>{defaultDate}</option>
+              </select>
             </label>
             <label>
-              <span className={labelClass}>{copy.from}</span>
-              <input type="time" name="from" defaultValue="19:00" className={field} required />
-            </label>
-            <label>
-              <span className={labelClass}>{copy.to}</span>
-              <input type="time" name="to" defaultValue="23:00" className={field} required />
+              <span className={labelClass}>{copy.bandLabel}</span>
+              <select name="band" defaultValue="evening" className={field}>
+                {bands.map((band) => (
+                  <option key={band.key} value={band.key}>
+                    {copy.bands[band.key] ?? band.key} ({band.startsLocal}&ndash;{band.endsLocal})
+                  </option>
+                ))}
+              </select>
             </label>
           </div>
 
           <div className="mt-4 grid grid-cols-2 gap-4">
+            {/* Optional, and deliberately empty. A party of four nobody asked
+                for would shape the shortlist on an assumption the user never
+                made. */}
             <label>
               <span className={labelClass}>{copy.partySize}</span>
-              <input
-                type="number"
-                name="party"
-                min={1}
-                max={20}
-                defaultValue={4}
-                className={field}
-              />
+              <input type="number" name="party" min={1} max={20} className={field} />
             </label>
             <label>
               <span className={labelClass}>
                 {copy.budgetCeiling} ({market.currency}, {copy.perPerson})
               </span>
-              <input
-                type="number"
-                name="budget"
-                min={0}
-                step={10}
-                placeholder="300"
-                className={field}
-              />
+              <input type="number" name="budget" min={0} step={10} className={field} />
             </label>
           </div>
 

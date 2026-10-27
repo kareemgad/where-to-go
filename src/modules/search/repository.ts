@@ -24,6 +24,7 @@ import type {
   Attributed,
   Candidate,
   CandidateKind,
+  CandidateOccurrence,
   CandidateTag,
   NoiseBand,
   SearchRequest,
@@ -51,13 +52,34 @@ export async function findCandidates(
   request: SearchRequest,
   clock: Clock,
 ): Promise<Candidate[]> {
-  const window = searchWindow({
-    date: request.date,
-    fromTime: request.fromTime,
-    toTime: request.toTime,
-    timezone: request.timezone,
-  });
-  const bounds = searchWindowBounds(window);
+  const { days } = request.when;
+  const first = days[0];
+  const last = days[days.length - 1];
+  if (!first || !last) {
+    // A window with no days cannot match anything, and running the query would
+    // be a full table scan to prove it.
+    return [];
+  }
+
+  // The outer span of the whole window: the start of the first day's band
+  // through the end of the last day's. Individual days are filtered in
+  // eligibility, where the overlap rule already lives.
+  const spanStart = searchWindowBounds(
+    searchWindow({
+      date: first,
+      fromTime: request.when.fromTime,
+      toTime: request.when.toTime,
+      timezone: request.timezone,
+    }),
+  ).startsAt;
+  const spanEnd = searchWindowBounds(
+    searchWindow({
+      date: last,
+      fromTime: request.when.fromTime,
+      toTime: request.when.toTime,
+      timezone: request.timezone,
+    }),
+  ).endsAt;
   const now = clock.now();
   const neighborhoodId = request.neighborhoodId ?? null;
 
@@ -100,19 +122,7 @@ export async function findCandidates(
 
       pp.amount_minor_low, pp.amount_minor_high, pp.currency as price_currency,
       pp.price_basis, pp.includes_tax, pp.includes_service_charge,
-      pp.evidence_state                               as price_evidence_state,
-
-      occ.id                                          as occurrence_id,
-      occ.title                                       as occurrence_title,
-      occ.genre_tags,
-      occ.performance_type,
-      occ.artist,
-      occ.starts_at, occ.ends_at, occ.timezone        as occurrence_timezone,
-      occ.local_start_date, occ.local_start_time,
-      occ.local_end_date, occ.local_end_time,
-      occ.source_expression,
-      occ.evidence_state                              as occurrence_evidence_state,
-      occ.source_authority                            as occurrence_source_authority
+      pp.evidence_state                               as price_evidence_state
     from venues v
     join markets m
       on m.id = v.canonical_market_id and m.status = 'live'
@@ -145,18 +155,6 @@ export async function findCandidates(
      and pn.place_id = v.id
      and pn.locale = ${request.locale}
      and pn.is_preferred
-    -- The earliest recommendable occurrence overlapping the window. The view
-    -- supplies the confirmed-and-evidenced gate; this adds only the date range.
-    left join lateral (
-      select p.*
-      from publishable_occurrences p
-      where p.venue_id = v.id
-        and p.ends_at > ${now}
-        and p.starts_at < ${bounds.endsAt}
-        and p.ends_at > ${bounds.startsAt}
-      order by p.starts_at
-      limit 1
-    ) occ on true
     -- Most recently observed price that is still inside its validity window.
     left join lateral (
       select q.*
@@ -172,34 +170,56 @@ export async function findCandidates(
     order by v.slug
   `;
 
+  // Occurrences in a second query rather than a join. A venue with a nightly
+  // programme has fourteen of them across a fourteen-day window, and joining
+  // would multiply every venue row by its occurrence count — re-evaluating the
+  // price lateral and the tag aggregates once per night.
+  const occurrenceRows = await sql<Record<string, unknown>[]>`
+    select
+      p.id, p.venue_id, p.title, p.genre_tags, p.performance_type, p.artist,
+      p.starts_at, p.ends_at, p.timezone,
+      p.local_start_date, p.local_start_time, p.local_end_date, p.local_end_time,
+      p.source_expression, p.evidence_state, p.source_authority
+    from publishable_occurrences p
+    join venues v on v.id = p.venue_id
+    where v.canonical_market_id = ${request.marketId}
+      and v.status = 'active'
+      -- A past occurrence is never upcoming (doc 02 AC02), and the view has
+      -- already applied the confirmed-and-evidenced gate.
+      and p.ends_at > ${now}
+      and p.starts_at < ${spanEnd}
+      and p.ends_at > ${spanStart}
+    order by p.venue_id, p.starts_at
+  `;
+
+  const byVenue = new Map<string, CandidateOccurrence[]>();
+  for (const row of occurrenceRows) {
+    const venueId = String(row['venue_id']);
+    const list = byVenue.get(venueId) ?? [];
+    list.push({
+      id: String(row['id']),
+      title: String(row['title']),
+      genreTags: (row['genre_tags'] as string[] | null) ?? [],
+      performanceType: String(row['performance_type']),
+      artist: (row['artist'] as string | null) ?? null,
+      time: {
+        startsAt: row['starts_at'] as Date,
+        endsAt: row['ends_at'] as Date,
+        timezone: String(row['timezone']),
+        localStartDate: localDate((row['local_start_date'] as Date).toISOString().slice(0, 10)),
+        localStartTime: localTime(String(row['local_start_time']).slice(0, 5)),
+        localEndDate: localDate((row['local_end_date'] as Date).toISOString().slice(0, 10)),
+        localEndTime: localTime(String(row['local_end_time']).slice(0, 5)),
+        sourceExpression: (row['source_expression'] as string | null) ?? null,
+      },
+      evidenceState: row['evidence_state'] as EvidenceState,
+      sourceAuthority: (row['source_authority'] as SourceAuthority | null) ?? null,
+    });
+    byVenue.set(venueId, list);
+  }
+
   return rows.map((row) => {
     const hasPrice = row['amount_minor_low'] !== null && row['amount_minor_low'] !== undefined;
-
-    const occurrenceId = row['occurrence_id'];
-    const occurrence =
-      occurrenceId === null || occurrenceId === undefined
-        ? null
-        : {
-            id: String(occurrenceId),
-            title: String(row['occurrence_title']),
-            genreTags: (row['genre_tags'] as string[] | null) ?? [],
-            performanceType: String(row['performance_type']),
-            artist: (row['artist'] as string | null) ?? null,
-            time: {
-              startsAt: row['starts_at'] as Date,
-              endsAt: row['ends_at'] as Date,
-              timezone: String(row['occurrence_timezone']),
-              localStartDate: localDate(
-                (row['local_start_date'] as Date).toISOString().slice(0, 10),
-              ),
-              localStartTime: localTime(String(row['local_start_time']).slice(0, 5)),
-              localEndDate: localDate((row['local_end_date'] as Date).toISOString().slice(0, 10)),
-              localEndTime: localTime(String(row['local_end_time']).slice(0, 5)),
-              sourceExpression: (row['source_expression'] as string | null) ?? null,
-            },
-            evidenceState: row['occurrence_evidence_state'] as EvidenceState,
-            sourceAuthority: (row['occurrence_source_authority'] as SourceAuthority | null) ?? null,
-          };
 
     const candidate: Candidate = {
       venueId: String(row['venue_id']),
@@ -281,7 +301,7 @@ export async function findCandidates(
             evidenceState: row['price_evidence_state'] as EvidenceState,
           }
         : null,
-      occurrence,
+      occurrences: byVenue.get(String(row['venue_id'])) ?? [],
     };
 
     return candidate;
