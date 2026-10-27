@@ -73,12 +73,21 @@ try {
     // ---- reset ------------------------------------------------------------
     // Order matters where polymorphic references mean no cascade exists.
     await tx`delete from price_points`;
+    // Handoffs reference venues and are intentionally not cascaded: a click
+    // record outliving its venue is a real counting problem, not a tidy-up.
+    // Rebuilding the demo world is the one place they are cleared.
+    await tx`delete from booking_handoffs`;
+    await tx`delete from published_attributes`;
+    await tx`delete from authorization_denials`;
     await tx`delete from verification_decisions`;
     await tx`delete from claims`;
     await tx`delete from evidence_records`;
     await tx`delete from source_documents`;
     await tx`delete from provider_payloads`;
-    await tx`delete from source_providers`;
+    // The editorial provider is infrastructure, not fixture data: it is how a
+    // reviewer's own correction gets provenance, and app_edit_claim refuses to
+    // run without it. Wiping the demo world must not take it with it.
+    await tx`delete from source_providers where key <> 'editorial'`;
     await tx`delete from venues`; // cascades spaces, locations, experience, series, occurrences
     await tx`delete from place_names`;
     await tx`delete from market_activations`;
@@ -203,6 +212,8 @@ try {
     // ---- venues -----------------------------------------------------------
     let occurrenceCount = 0;
     let claimCount = 0;
+    let pendingCount = 0;
+    let conflictCount = 0;
 
     for (const venue of VENUES) {
       const marketId = marketIds.get(venue.marketSlug);
@@ -407,8 +418,70 @@ try {
             insert into verification_decisions (claim_id, action, reason)
             values (${claimRow.id}, 'approve', 'fixture data, approved for demo')
           `;
-          await tx`update claims set lifecycle_state = 'published' where id = ${claimRow.id}`;
+
+          if (o.disputedBy) {
+            // A second credible source with a different start time. Both
+            // claims go in as validated and the conflict is then *found* by
+            // app_publish_claim rather than declared here, so this fixture
+            // exercises the real path: both sides marked, both queued, nothing
+            // published, and the night left unrecommendable.
+            const { occurrence: disputed } = occurrenceFromLocal({
+              date: shifted,
+              startTime: o.disputedBy.startTime,
+              durationMinutes: o.durationMinutes,
+              timezone: marketFixture.timezone,
+              sourceExpression: o.disputedBy.sourceExpression,
+            });
+            const rivalAnchor = await anchor('event.schedule', o.disputedBy.sourceExpression);
+            const rival = pickOne(await tx`
+              insert into claims (
+                subject_kind, subject_id, attribute_key, value, evidence_id,
+                lifecycle_state, evidence_state, source_authority, observed_at
+              ) values (
+                'event_occurrence', ${occurrenceRow.id}, 'event.schedule',
+                ${JSON.stringify({ startsAt: disputed.startsAt, source: o.disputedBy.sourceExpression })}::jsonb,
+                ${rivalAnchor}, 'validated',
+                ${o.disputedBy.evidenceState}::evidence_state,
+                ${o.disputedBy.sourceAuthority}::source_authority, ${clock.now()}
+              ) returning id
+            `, 'rival');
+            claimCount += 1;
+            await tx`
+              insert into verification_decisions (claim_id, action, reason)
+              values (${rival.id}, 'approve', 'fixture data, approved for demo')
+            `;
+
+            const outcome = pickOne(await tx`
+              select app_publish_claim(${claimRow.id}) as result
+            `, 'outcome');
+            if (outcome.result.status !== 'conflict') {
+              throw new Error(
+                `The disputed fixture did not produce a conflict: ${JSON.stringify(outcome.result)}`,
+              );
+            }
+            conflictCount += 1;
+          } else {
+            await tx`update claims set lifecycle_state = 'published' where id = ${claimRow.id}`;
+          }
         }
+      }
+
+      // --- claims left for a reviewer --------------------------------------
+      for (const pending of venue.pendingClaims ?? []) {
+        const pendingAnchor = await anchor(pending.attributeKey, pending.excerpt);
+        await tx`
+          insert into claims (
+            subject_kind, subject_id, attribute_key, value, evidence_id,
+            lifecycle_state, evidence_state, source_authority, observed_at
+          ) values (
+            'venue', ${venueRow.id}, ${pending.attributeKey},
+            ${JSON.stringify(pending.value)}::jsonb, ${pendingAnchor},
+            'validated', ${pending.evidenceState}::evidence_state,
+            ${pending.sourceAuthority}::source_authority, ${clock.now()}
+          )
+        `;
+        claimCount += 1;
+        pendingCount += 1;
       }
     }
 
@@ -418,6 +491,7 @@ try {
     console.log(`  venues         ${VENUES.length}`);
     console.log(`  occurrences    ${occurrenceCount}`);
     console.log(`  claims         ${claimCount}`);
+    console.log(`  awaiting review ${pendingCount} pending, ${conflictCount} in conflict`);
   });
 
   // ---- what a consumer can actually see -----------------------------------

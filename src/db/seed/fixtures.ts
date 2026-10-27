@@ -155,7 +155,39 @@ export type OccurrenceFixture = {
   evidenceState: EvidenceState;
   sourceAuthority: SourceAuthority | null;
   sourceExpression: string | null;
+  /**
+   * A second credible source giving a different start time.
+   *
+   * Present so the conflict is *derived* rather than declared. Writing
+   * evidenceState: 'conflicting' by hand produces a claim that looks disputed
+   * while nothing actually disagrees with it, which is the one shape the
+   * review queue can never be exercised against.
+   */
+  disputedBy?: {
+    startTime: string;
+    sourceExpression: string;
+    sourceAuthority: SourceAuthority;
+    evidenceState: EvidenceState;
+  };
 };
+
+/**
+ * A claim deliberately left awaiting a human decision.
+ *
+ * The rest of the fixture world is already published, which is right for
+ * demonstrating search and wrong for demonstrating review: a queue with
+ * nothing in it proves nothing. These are the rows a reviewer opens.
+ */
+export interface PendingClaimFixture {
+  attributeKey: string;
+  value: unknown;
+  sourceAuthority: SourceAuthority;
+  evidenceState: EvidenceState;
+  /** What the source actually said, kept verbatim as the evidence excerpt. */
+  excerpt: string;
+  /** Why this one is in the queue, printed by the seeder. */
+  purpose: string;
+}
 
 export interface VenueFixture {
   marketSlug: string;
@@ -196,6 +228,8 @@ export interface VenueFixture {
     performanceType: OccurrenceFixture['performanceType'];
   } | null;
   occurrences: OccurrenceFixture[];
+  /** Claims left in the queue for the review workflow to act on. */
+  pendingClaims?: PendingClaimFixture[];
 }
 
 const confirmedByVenue = {
@@ -582,10 +616,19 @@ export const VENUES: VenueFixture[] = [
         title: 'Disputed Start Time (fictional)',
         genreTags: ['jazz'],
         performanceType: 'live_band',
-        sourceExpression: 'Fri 7pm (venue page) / Fri 9pm (listing)',
+        sourceExpression: 'Fri 7pm (venue page)',
         state: 'scheduled',
-        evidenceState: 'conflicting',
+        evidenceState: 'source_claimed',
         sourceAuthority: 'venue_attested',
+        // The disagreement that makes this fixture what it is. The seeder
+        // publishes the first claim and lets app_publish_claim find the
+        // conflict, so both sides end up queued and neither is published.
+        disputedBy: {
+          startTime: '21:00',
+          sourceExpression: 'Fri 9pm (aggregator listing)',
+          sourceAuthority: 'authorized_feed',
+          evidenceState: 'source_claimed',
+        },
       },
     ],
   },
@@ -657,6 +700,29 @@ export const VENUES: VenueFixture[] = [
         performanceType: 'acoustic_set',
         sourceExpression: 'Fri 7:30pm',
         ...confirmedByVenue,
+      },
+    ],
+    pendingClaims: [
+      {
+        attributeKey: 'access.wheelchair',
+        value: true,
+        sourceAuthority: 'visitor_reported',
+        evidenceState: 'source_claimed',
+        excerpt: 'visitor note: "got my partner’s chair in through the side door"',
+        purpose:
+          'Accessibility is high-impact, so this cannot publish without a recorded decision. ' +
+          'It is also the case where approving is not the same as verifying: the reviewer is ' +
+          'judging a visitor report, not the entrance.',
+      },
+      {
+        attributeKey: 'price.cover_charge',
+        value: { amountMinor: 7500, currency: 'AED', basis: 'per_entry' },
+        sourceAuthority: 'ai_extracted',
+        evidenceState: 'source_claimed',
+        excerpt: 'extracted from a listing: "entry 75 on weekends"',
+        purpose:
+          'A machine extraction of a fee. High-impact and unapproved, so the typed column stays ' +
+          'empty and the page says nothing about a cover charge until a human decides.',
       },
     ],
   },

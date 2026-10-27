@@ -86,18 +86,25 @@ try {
 
     const makeClaim = async (overrides) => {
       const anchorId = await anchor(overrides.attribute_key, overrides.excerpt ?? 'fixture');
+      // The value goes through tx.json rather than the driver's object helper.
+      // A pre-stringified object handed to that helper is stored as a jsonb
+      // *string*, not a jsonb object, so these fixtures looked like the real
+      // thing while never exercising an object-valued claim.
       const [row] = await tx`
-        insert into claims ${tx({
-          subject_kind: overrides.subject_kind ?? 'venue',
-          subject_id: overrides.subject_id ?? venue.id,
-          attribute_key: overrides.attribute_key,
-          value: overrides.value,
-          evidence_id: anchorId,
-          lifecycle_state: overrides.lifecycle_state ?? 'validated',
-          evidence_state: overrides.evidence_state ?? 'source_claimed',
-          source_authority: overrides.source_authority ?? 'venue_attested',
-          observed_at: new Date(),
-        })} returning id
+        insert into claims (
+          subject_kind, subject_id, attribute_key, value, evidence_id,
+          lifecycle_state, evidence_state, source_authority, observed_at
+        ) values (
+          ${overrides.subject_kind ?? 'venue'}::claim_subject_kind,
+          ${overrides.subject_id ?? venue.id},
+          ${overrides.attribute_key},
+          ${tx.json(overrides.value)},
+          ${anchorId},
+          ${overrides.lifecycle_state ?? 'validated'}::claim_lifecycle_state,
+          ${overrides.evidence_state ?? 'source_claimed'}::evidence_state,
+          ${overrides.source_authority ?? 'venue_attested'}::source_authority,
+          ${new Date()}
+        ) returning id
       `;
       return row.id;
     };
@@ -125,14 +132,14 @@ try {
       subject_kind: 'event_occurrence',
       subject_id: occurrence.id,
       attribute_key: 'event.schedule',
-      value: JSON.stringify({ startsAt: '20:00' }),
+      value: { startsAt: '20:00' },
       excerpt: 'venue page says 8pm',
     });
     const claimB = await makeClaim({
       subject_kind: 'event_occurrence',
       subject_id: occurrence.id,
       attribute_key: 'event.schedule',
-      value: JSON.stringify({ startsAt: '21:00' }),
+      value: { startsAt: '21:00' },
       excerpt: 'listing says 9pm',
     });
     // event.schedule is high-impact, so both carry a human approval; the point
@@ -265,7 +272,7 @@ try {
 
     const highImpact = await makeClaim({
       attribute_key: 'price.per_person',
-      value: JSON.stringify({ low: 100, high: 200 }),
+      value: { low: 100, high: 200 },
     });
     const [hi] = await tx`select app_publish_claim(${highImpact}) as r`;
     is('a high-impact claim with no decision needs review', hi.r.status, 'needs_review');
@@ -312,7 +319,7 @@ try {
       subject_kind: 'event_occurrence',
       subject_id: clean.id,
       attribute_key: 'event.schedule',
-      value: JSON.stringify({ startsAt: '20:00' }),
+      value: { startsAt: '20:00' },
     });
     await tx`
       insert into verification_decisions (claim_id, action, reason)
@@ -332,7 +339,7 @@ try {
       subject_kind: 'event_occurrence',
       subject_id: clean.id,
       attribute_key: 'event.schedule',
-      value: JSON.stringify({ startsAt: '20:00', note: 'machine read' }),
+      value: { startsAt: '20:00', note: 'machine read' },
       source_authority: 'ai_extracted',
     });
     await tx`update claims set supersedes_claim_id = ${scheduleClaim} where id = ${aiClaim}`;
